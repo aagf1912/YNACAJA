@@ -1,0 +1,12 @@
+{
+  "appId": "com.ynacaja.app",
+  "appName": "YnaCaja",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#2C474E"
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}
