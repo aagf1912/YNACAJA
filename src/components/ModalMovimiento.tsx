@@ -264,7 +264,7 @@ export const ModalMovimiento: React.FC<Props> = ({
               >
                 {CATEGORIAS_GASTO.map((cat) => (
                   <option key={cat.nombre} value={cat.nombre}>
-                    {cat.nombre} ({cat.naturaleza})
+                    {cat.nombre} ({cat.naturaleza === 'Negocio' || (cat.naturaleza as string) === 'Gastos' ? 'Gastos' : cat.naturaleza})
                   </option>
                 ))}
               </select>

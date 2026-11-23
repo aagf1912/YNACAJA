@@ -20,7 +20,9 @@ import {
   signOutUsuario,
   supabase,
 } from './services/supabase';
-import { Loader2 } from 'lucide-react';
+import { getVenezuelaDate } from './utils/parserLocal';
+import { obtenerTasaBCVOficial } from './lib/bcv';
+import { Loader2, CheckCircle2 } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabKey>('registrar');
@@ -31,6 +33,8 @@ export const App: React.FC = () => {
   const [cargandoAuth, setCargandoAuth] = useState<boolean>(true);
   const [cargandoDatos, setCargandoDatos] = useState<boolean>(false);
   const [modalPuestosAbierto, setModalPuestosAbierto] = useState<boolean>(false);
+  const [sincronizandoBCV, setSincronizandoBCV] = useState<boolean>(false);
+  const [toastTasa, setToastTasa] = useState<string | null>(null);
 
   // 1. Cargar Sesión y Perfil
   const verificarSesion = useCallback(async () => {
@@ -100,9 +104,38 @@ export const App: React.FC = () => {
         getMovimientos(perfil.rol, perfil.puesto_id),
       ]);
 
-      if (cfg?.tasa_dia) {
-        setTasaDia(Number(cfg.tasa_dia));
+      let tasaFinal = cfg?.tasa_dia ? Number(cfg.tasa_dia) : 100.0;
+
+      // Sincronización automática con BCV si la fecha guardada es anterior a hoy (UTC-4)
+      const fechaHoyVzla = getVenezuelaDate();
+      let fechaCfgVzla = '';
+      if (cfg?.updated_at) {
+        try {
+          const d = new Date(cfg.updated_at);
+          const formatter = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'America/Caracas',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          });
+          fechaCfgVzla = formatter.format(d);
+        } catch {}
       }
+
+      if (!fechaCfgVzla || fechaCfgVzla < fechaHoyVzla) {
+        try {
+          const tasaBcv = await obtenerTasaBCVOficial();
+          if (tasaBcv > 0 && tasaBcv !== tasaFinal) {
+            const updated = await updateTasaDia(tasaBcv);
+            tasaFinal = Number(updated.tasa_dia);
+            console.log(`✓ Tasa BCV sincronizada automáticamente a hoy (${fechaHoyVzla}): ${tasaBcv} Bs/$`);
+          }
+        } catch (e) {
+          console.warn('Aviso sincronizando tasa BCV automática al inicio:', e);
+        }
+      }
+
+      setTasaDia(tasaFinal);
       setPuestos(pts);
       setMovimientos(movs);
     } catch (err) {
@@ -143,6 +176,24 @@ export const App: React.FC = () => {
   const handleActualizarTasa = async (nuevaTasa: number) => {
     const updated = await updateTasaDia(nuevaTasa);
     setTasaDia(Number(updated.tasa_dia));
+  };
+
+  // Sincronización manual bajo demanda desde el botón "↻ BCV"
+  const handleSincronizarBCV = async () => {
+    if (sincronizandoBCV) return;
+    setSincronizandoBCV(true);
+    try {
+      const nuevaTasa = await obtenerTasaBCVOficial();
+      if (nuevaTasa > 0) {
+        await handleActualizarTasa(nuevaTasa);
+        setToastTasa(`✓ Tasa BCV actualizada a ${nuevaTasa} Bs/$`);
+        setTimeout(() => setToastTasa(null), 3500);
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Error al obtener la tasa oficial del BCV.');
+    } finally {
+      setSincronizandoBCV(false);
+    }
   };
 
   // Manejo de inserción de movimientos
@@ -211,10 +262,20 @@ export const App: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F4F4F5] text-[#18181B]">
+      {/* Toast Flotante de confirmación de Tasa */}
+      {toastTasa && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-[#166534] text-white px-4 py-2 rounded-xl shadow-lg border border-[#86EFAC]/30 flex items-center gap-2 animate-bounce">
+          <CheckCircle2 size={16} className="text-[#86EFAC]" />
+          <span className="text-xs sm:text-sm font-bold">{toastTasa}</span>
+        </div>
+      )}
+
       {/* Header Fijo */}
       <Header
         tasaDia={tasaDia}
         onActualizarTasa={handleActualizarTasa}
+        onSincronizarBCV={handleSincronizarBCV}
+        sincronizandoBCV={sincronizandoBCV}
         perfil={perfil}
         onCerrarSesion={handleCerrarSesion}
         onAbrirGestionPuestos={() => setModalPuestosAbierto(true)}

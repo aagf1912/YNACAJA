@@ -14,6 +14,27 @@ const cleanEnv = (val: unknown, fallback: string): string => {
 export const supabaseUrl = cleanEnv(import.meta.env.VITE_SUPABASE_URL, FALLBACK_SUPABASE_URL);
 export const supabaseAnonKey = cleanEnv(import.meta.env.VITE_SUPABASE_ANON_KEY, FALLBACK_SUPABASE_ANON_KEY);
 
+// Obtiene el token de acceso JWT actual de localStorage sin invocar lock de navigator.locks
+export function getAccessTokenFromStorage(): string {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.access_token) {
+            return parsed.access_token;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Error leyendo auth token de localStorage:', e);
+  }
+  return '';
+}
+
 const isConfigured = Boolean(
   supabaseUrl &&
   supabaseAnonKey &&

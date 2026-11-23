@@ -19,12 +19,13 @@ export const BadgeNaturaleza: React.FC<Props> = ({ naturaleza, tipo, className =
   }
 
   switch (naturaleza) {
+    case 'Gastos':
     case 'Negocio':
       return (
         <span
           className={`inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded border bg-[#FEF2F2] border-[#FECACA] text-[#991B1B] ${className}`}
         >
-          Negocio
+          Gastos
         </span>
       );
     case 'Personal':
@@ -35,20 +36,12 @@ export const BadgeNaturaleza: React.FC<Props> = ({ naturaleza, tipo, className =
           Personal
         </span>
       );
-    case 'Créditos / Otros':
-      return (
-        <span
-          className={`inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded border bg-[#EFF6FF] border-[#BFDBFE] text-[#1E40AF] ${className}`}
-        >
-          Créditos / Otros
-        </span>
-      );
     default:
       return (
         <span
-          className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border bg-zinc-100 border-zinc-200 text-zinc-700 ${className}`}
+          className={`inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded border bg-[#FEF2F2] border-[#FECACA] text-[#991B1B] ${className}`}
         >
-          {naturaleza}
+          Gastos
         </span>
       );
   }

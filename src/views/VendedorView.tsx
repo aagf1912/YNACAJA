@@ -385,6 +385,75 @@ export const VendedorView: React.FC<Props> = ({
     );
   }, [liquidaciones, perfil.puesto_id, infoSemanaGanancias.semanaInicio]);
 
+  // Liquidación de la semana actual si está pagada
+  const liquidacionSemanaActual = useMemo(() => {
+    if (!perfil.puesto_id) return null;
+    return liquidaciones.find(
+      (l) =>
+        l.puesto_id === perfil.puesto_id &&
+        l.semana_inicio === infoSemanaGanancias.semanaInicio &&
+        l.pagado !== false
+    ) || null;
+  }, [liquidaciones, perfil.puesto_id, infoSemanaGanancias.semanaInicio]);
+
+  // Comprobante informativo de cobro (Monto en Bs y Tasa BCV aplicada)
+  const [comprobantePago, setComprobantePago] = useState<{ montoBs: number; tasa: number } | null>(null);
+
+  useEffect(() => {
+    if (!liquidacionSemanaActual) {
+      setComprobantePago(null);
+      return;
+    }
+
+    // 1. Si la liquidación guardada ya contiene monto_bs y tasa
+    if (liquidacionSemanaActual.monto_bs && liquidacionSemanaActual.tasa) {
+      setComprobantePago({
+        montoBs: Number(liquidacionSemanaActual.monto_bs),
+        tasa: Number(liquidacionSemanaActual.tasa),
+      });
+      return;
+    }
+
+    // 2. Si tiene movimiento_gasto_id o movimiento_id, consultarlo
+    const movId = (liquidacionSemanaActual as any).movimiento_gasto_id || liquidacionSemanaActual.movimiento_id;
+    if (!movId) {
+      setComprobantePago(null);
+      return;
+    }
+
+    // Buscar en movimientos locales en memoria
+    const movLocal = movimientos.find((m) => m.id === movId);
+    if (movLocal) {
+      const mBs = Number(movLocal.monto_bs ?? movLocal.monto_original);
+      const t = Number(movLocal.tasa ?? movLocal.tasa_aplicada);
+      if (mBs > 0 && t > 0) {
+        setComprobantePago({ montoBs: mBs, tasa: t });
+        return;
+      }
+    }
+
+    // Si no está en memoria, consultar via fetch directo
+    const token = getAccessTokenFromStorage() || supabaseAnonKey;
+    fetch(`${supabaseUrl}/rest/v1/movimientos?id=eq.${movId}&select=*`, {
+      headers: {
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${token}`,
+      },
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data) && data[0]) {
+          const m = data[0];
+          const mBs = Number(m.monto_bs ?? m.monto_original);
+          const t = Number(m.tasa ?? m.tasa_aplicada);
+          if (mBs > 0 && t > 0) {
+            setComprobantePago({ montoBs: mBs, tasa: t });
+          }
+        }
+      })
+      .catch((err) => console.warn('Aviso cargando comprobante de cobro:', err));
+  }, [liquidacionSemanaActual, movimientos]);
+
   const movimientosSemanaGanancias = useMemo(() => {
     return movimientos.filter((m) => {
       const esPuesto = !perfil.puesto_id || m.puesto_id === perfil.puesto_id;
@@ -874,10 +943,17 @@ export const VendedorView: React.FC<Props> = ({
 
               <div className="sm:text-right">
                 {semanaGananciasPagada ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-[#166534] text-white border border-[#22c55e] shadow-xs">
-                    <CheckCircle2 size={14} />
-                    <span>Pagado ✓</span>
-                  </span>
+                  <div className="flex flex-col items-start sm:items-end">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-[#166534] text-white border border-[#22c55e] shadow-xs">
+                      <CheckCircle2 size={14} />
+                      <span>Pagado ✓</span>
+                    </span>
+                    {comprobantePago && (
+                      <span className="text-[11px] text-[#86EFAC] font-mono mt-1 font-semibold">
+                        Cobrado: {formatVES(comprobantePago.montoBs)} (Tasa BCV: {formatNumber(comprobantePago.tasa)} Bs/$)
+                      </span>
+                    )}
+                  </div>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40">
                     <Clock size={14} />

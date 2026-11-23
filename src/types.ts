@@ -1,6 +1,6 @@
 export type TipoMovimiento = 'venta' | 'gasto' | 'ingreso' | 'egreso';
 
-export type NaturalezaMovimiento = 'Negocio' | 'Personal' | 'Créditos / Otros';
+export type NaturalezaMovimiento = 'Negocio' | 'Personal' | 'Gastos' | 'Créditos / Otros';
 
 export type CategoriaMovimiento =
   | 'Ventas'
@@ -77,7 +77,6 @@ export interface ConfigNegocio {
 
 export const CATEGORIAS_GASTO: { nombre: CategoriaMovimiento; naturaleza: NaturalezaMovimiento }[] = [
   { nombre: 'Nómina / Sueldos', naturaleza: 'Negocio' },
-  { nombre: 'Créditos (Cashea / Krece)', naturaleza: 'Créditos / Otros' },
   { nombre: 'Materia Prima', naturaleza: 'Negocio' },
   { nombre: 'Personal / Ocio / Regalos', naturaleza: 'Personal' },
   { nombre: 'Transporte y Logística', naturaleza: 'Negocio' },
@@ -93,12 +92,17 @@ export interface LiquidacionSemanal {
   puesto_id: string;
   semana_inicio: string; // YYYY-MM-DD (Lunes)
   semana_fin: string;    // YYYY-MM-DD (Sábado)
+  total_ventas_usd?: number;
+  comision_porcentaje?: number;
+  monto_comision_usd?: number;
   monto_usd?: number;
   monto_bs?: number;
   tasa?: number;
   pagado?: boolean;
   fecha_pago?: string;
   movimiento_id?: string | null;
+  movimiento_gasto_id?: string | null;
+  pagado_por?: string | null;
   created_at?: string;
 }
 

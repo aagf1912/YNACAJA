@@ -15,7 +15,7 @@ interface Props {
   onCrearMovimiento: (mov: Omit<Movimiento, 'id' | 'created_at'>) => Promise<Movimiento[]>;
 }
 
-type FiltroTipo = 'todos' | 'ventas' | 'negocio' | 'personal' | 'creditos';
+type FiltroTipo = 'todos' | 'ventas' | 'gastos' | 'personal';
 
 export const MovimientosView: React.FC<Props> = ({
   movimientos,
@@ -50,9 +50,8 @@ export const MovimientosView: React.FC<Props> = ({
 
       // Filtro tipo / naturaleza
       if (filtro === 'ventas' && m.tipo !== 'venta' && m.tipo !== 'ingreso') return false;
-      if (filtro === 'negocio' && ((m.tipo !== 'gasto' && m.tipo !== 'egreso') || m.naturaleza !== 'Negocio')) return false;
+      if (filtro === 'gastos' && ((m.tipo !== 'gasto' && m.tipo !== 'egreso') || (m.naturaleza !== 'Gastos' && m.naturaleza !== 'Negocio' && m.naturaleza !== 'Créditos / Otros'))) return false;
       if (filtro === 'personal' && ((m.tipo !== 'gasto' && m.tipo !== 'egreso') || m.naturaleza !== 'Personal')) return false;
-      if (filtro === 'creditos' && ((m.tipo !== 'gasto' && m.tipo !== 'egreso') || m.naturaleza !== 'Créditos / Otros')) return false;
 
       // Búsqueda por texto
       if (busqueda.trim()) {
@@ -218,14 +217,14 @@ export const MovimientosView: React.FC<Props> = ({
           </button>
           <button
             type="button"
-            onClick={() => setFiltro('negocio')}
+            onClick={() => setFiltro('gastos')}
             className={`px-2.5 py-1 text-xs rounded font-medium transition-colors shrink-0 ${
-              filtro === 'negocio'
+              filtro === 'gastos'
                 ? 'bg-[#2C474E] text-white font-bold'
                 : 'bg-[#F4F4F5] text-[#2C474E] hover:bg-zinc-200'
             }`}
           >
-            Negocio
+            Gastos
           </button>
           <button
             type="button"
@@ -237,17 +236,6 @@ export const MovimientosView: React.FC<Props> = ({
             }`}
           >
             Personal
-          </button>
-          <button
-            type="button"
-            onClick={() => setFiltro('creditos')}
-            className={`px-2.5 py-1 text-xs rounded font-medium transition-colors shrink-0 ${
-              filtro === 'creditos'
-                ? 'bg-[#7C2D12] text-white font-bold'
-                : 'bg-[#F4F4F5] text-[#7C2D12] hover:bg-zinc-200'
-            }`}
-          >
-            Créditos
           </button>
         </div>
       </div>

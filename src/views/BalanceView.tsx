@@ -13,6 +13,9 @@ import {
   Store,
   CheckCircle2,
   Loader2,
+  X,
+  Smartphone,
+  Banknote,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -36,6 +39,7 @@ import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
 import { getSemanaLunesSabado, shiftSemana } from '../utils/dateUtils';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { getLiquidacionesSemanales, registrarLiquidacionSemanal, insertMovimientos } from '../services/supabase';
+import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
 
 interface Props {
   movimientos: Movimiento[];
@@ -100,54 +104,171 @@ export const BalanceView: React.FC<Props> = ({
     [liquidaciones, infoSemana.semanaInicio]
   );
 
-  // Pagar comisión de vendedor (Liquidación como Gasto en movimientos y registro en liquidaciones_semanales)
-  const handlePagarComision = async (p: { id: string; nombre: string; comisionUSD: number }) => {
+  // Estado para el modal de pago de comisiones
+  interface ModalPagarComisionData {
+    puestoId: string;
+    puestoNombre: string;
+    totalVentasUSD: number;
+    comisionPorcentaje: number;
+    comisionUSD: number;
+  }
+  const [pagoModalData, setPagoModalData] = useState<ModalPagarComisionData | null>(null);
+  const [tasaPagoComision, setTasaPagoComision] = useState<string>('');
+  const [metodoPagoComision, setMetodoPagoComision] = useState<'pago_movil' | 'efectivo_bs'>('pago_movil');
+
+  // Abrir modal de pago de comisión con datos precargados
+  const handleAbrirModalPago = (p: {
+    id: string;
+    nombre: string;
+    totalUSD: number;
+    porcentaje: number;
+    comisionUSD: number;
+  }) => {
     if (isPuestoLiquidado(p.id) || p.comisionUSD <= 0) return;
-    const tasa = tasaActual > 0 ? tasaActual : 100;
-    const montoComision = p.comisionUSD;
-    const montoBs = Math.round(montoComision * tasa * 100) / 100;
+    setTasaPagoComision(tasaActual > 0 ? String(tasaActual) : '100');
+    setMetodoPagoComision('pago_movil');
+    setPagoModalData({
+      puestoId: p.id,
+      puestoNombre: p.nombre,
+      totalVentasUSD: p.totalUSD,
+      comisionPorcentaje: p.porcentaje,
+      comisionUSD: p.comisionUSD,
+    });
+  };
 
-    const confirmar = window.confirm(
-      `¿Confirmas el pago de comisión de ${formatUSD(montoComision)} (${formatVES(montoBs)}) para el puesto "${p.nombre}" por la semana ${rangoTexto}?\n\nSe registrará automáticamente como un gasto de "Sueldos / Comisiones" y la semana quedará marcada como Pagada ✓.`
-    );
-    if (!confirmar) return;
+  // Confirmar y registrar pago de comisión con fetch directo a movimientos y liquidaciones_semanales
+  const handleConfirmarPago = async () => {
+    if (!pagoModalData || liquidandoPuestoId) return;
 
-    setLiquidandoPuestoId(p.id);
+    const tasaNum = parseFloat(tasaPagoComision);
+    if (isNaN(tasaNum) || tasaNum <= 0) {
+      alert('Ingresa una tasa BCV válida mayor a 0.');
+      return;
+    }
+
+    const { puestoId, puestoNombre, totalVentasUSD, comisionPorcentaje, comisionUSD } = pagoModalData;
+    const montoBs = Math.round(comisionUSD * tasaNum * 100) / 100;
+    const fechaHoy = getVenezuelaDate();
+    const token = getAccessTokenFromStorage() || supabaseAnonKey;
+
+    setLiquidandoPuestoId(puestoId);
     try {
-      const nuevoMov: Omit<Movimiento, 'id' | 'created_at'> = {
-        fecha: getVenezuelaDate(),
-        descripcion: `Pago Comisión Semana ${rangoTexto} - ${p.nombre}`,
-        tipo: 'gasto',
-        naturaleza: 'Negocio',
-        categoria: 'Sueldos / Comisiones',
-        metodo_pago: 'efectivo_bs',
-        moneda_original: 'USD',
-        moneda: 'USD',
-        monto_original: montoComision,
-        tasa_aplicada: tasa,
-        tasa,
-        monto_usd: montoComision,
+      const movId = crypto.randomUUID ? crypto.randomUUID() : `mov_${Date.now()}`;
+      const payloadMov = {
+        id: movId,
+        fecha: fechaHoy,
+        descripcion: `Pago Comisión Semana ${rangoTexto} - ${puestoNombre}`,
+        tipo: 'gasto' as const,
+        naturaleza: 'Negocio' as const, // En la UI se muestra como Gastos
+        categoria: 'Sueldos / Comisiones' as const,
+        metodo_pago: metodoPagoComision,
+        moneda: 'VES',
+        moneda_original: 'VES' as const,
+        monto_original: montoBs,
         monto_bs: montoBs,
-        puesto_id: p.id,
+        monto_usd: comisionUSD,
+        tasa: tasaNum,
+        tasa_aplicada: tasaNum,
+        puesto_id: puestoId,
       };
 
-      if (onGuardarMovimientos) {
-        await onGuardarMovimientos([nuevoMov]);
-      } else {
-        await insertMovimientos([nuevoMov]);
+      // 1. Insertar movimiento en public.movimientos via fetch directo
+      let movimientoGastoId = movId;
+      try {
+        const resMov = await fetch(`${supabaseUrl}/rest/v1/movimientos`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: supabaseAnonKey,
+            Authorization: `Bearer ${token}`,
+            Prefer: 'return=representation',
+          },
+          body: JSON.stringify([payloadMov]),
+        });
+
+        if (resMov.ok) {
+          const dataMov = await resMov.json();
+          if (Array.isArray(dataMov) && dataMov[0]?.id) {
+            movimientoGastoId = dataMov[0].id;
+          }
+        } else {
+          if (onGuardarMovimientos) {
+            const guardados = await onGuardarMovimientos([payloadMov]);
+            if (guardados && guardados[0]) movimientoGastoId = guardados[0].id;
+          } else {
+            const guardados = await insertMovimientos([payloadMov]);
+            if (guardados && guardados[0]) movimientoGastoId = guardados[0].id;
+          }
+        }
+      } catch (errMov) {
+        console.warn('Fallo fetch insert movimiento, aplicando fallback:', errMov);
+        if (onGuardarMovimientos) {
+          const guardados = await onGuardarMovimientos([payloadMov]);
+          if (guardados && guardados[0]) movimientoGastoId = guardados[0].id;
+        } else {
+          const guardados = await insertMovimientos([payloadMov]);
+          if (guardados && guardados[0]) movimientoGastoId = guardados[0].id;
+        }
       }
 
-      await registrarLiquidacionSemanal({
-        puesto_id: p.id,
+      // 2. Guardar liquidación en public.liquidaciones_semanales via fetch directo
+      const payloadLiq: Record<string, any> = {
+        puesto_id: puestoId,
         semana_inicio: infoSemana.semanaInicio,
         semana_fin: infoSemana.semanaFin,
-        monto_usd: montoComision,
+        total_ventas_usd: totalVentasUSD,
+        comision_porcentaje: comisionPorcentaje,
+        monto_comision_usd: comisionUSD,
+        monto_usd: comisionUSD,
         monto_bs: montoBs,
-        tasa,
+        tasa: tasaNum,
+        movimiento_gasto_id: movimientoGastoId,
+        movimiento_id: movimientoGastoId,
         pagado: true,
-        fecha_pago: getVenezuelaDate(),
-      });
+        fecha_pago: fechaHoy,
+      };
 
+      try {
+        const resLiq = await fetch(`${supabaseUrl}/rest/v1/liquidaciones_semanales`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: supabaseAnonKey,
+            Authorization: `Bearer ${token}`,
+            Prefer: 'resolution=merge-duplicates,return=representation',
+          },
+          body: JSON.stringify([payloadLiq]),
+        });
+
+        if (!resLiq.ok) {
+          await registrarLiquidacionSemanal({
+            puesto_id: puestoId,
+            semana_inicio: infoSemana.semanaInicio,
+            semana_fin: infoSemana.semanaFin,
+            monto_usd: comisionUSD,
+            monto_bs: montoBs,
+            tasa: tasaNum,
+            movimiento_id: movimientoGastoId,
+            pagado: true,
+            fecha_pago: fechaHoy,
+          });
+        }
+      } catch (errLiq) {
+        console.warn('Fallo fetch liquidaciones_semanales, aplicando fallback:', errLiq);
+        await registrarLiquidacionSemanal({
+          puesto_id: puestoId,
+          semana_inicio: infoSemana.semanaInicio,
+          semana_fin: infoSemana.semanaFin,
+          monto_usd: comisionUSD,
+          monto_bs: montoBs,
+          tasa: tasaNum,
+          movimiento_id: movimientoGastoId,
+          pagado: true,
+          fecha_pago: fechaHoy,
+        });
+      }
+
+      setPagoModalData(null);
       await cargarLiquidaciones();
     } catch (err: any) {
       console.error('Error al pagar comisión:', err);
@@ -388,15 +509,27 @@ export const BalanceView: React.FC<Props> = ({
     return resumenCategorias.reduce((acc, c) => acc + c.itemsCount, 0);
   }, [resumenCategorias]);
 
-  // 6. Desglose por Naturaleza del Gasto (Operativo vs Personal)
+  // 6. Desglose por Naturaleza del Gasto (Gastos vs Personal)
   const desgloseNaturaleza = useMemo(() => {
-    const tipos: NaturalezaMovimiento[] = ['Negocio', 'Créditos / Otros', 'Personal'];
-    return tipos.map((nat) => {
+    const tipos: { key: NaturalezaMovimiento; label: string; matches: (nat: string) => boolean }[] = [
+      {
+        key: 'Negocio',
+        label: 'Gastos',
+        matches: (nat) => nat === 'Negocio' || nat === 'Gastos' || nat === 'Créditos / Otros',
+      },
+      {
+        key: 'Personal',
+        label: 'Personal',
+        matches: (nat) => nat === 'Personal',
+      },
+    ];
+
+    return tipos.map((t) => {
       let bs = 0;
       let usd = 0;
 
       for (const m of movimientosSemanaFiltrados) {
-        if ((m.tipo === 'gasto' || m.tipo === 'egreso') && m.naturaleza === nat) {
+        if ((m.tipo === 'gasto' || m.tipo === 'egreso') && t.matches(m.naturaleza || 'Negocio')) {
           const { monto_usd, monto_bs } = calcularMontos(m);
           bs += monto_bs;
           usd += monto_usd;
@@ -407,7 +540,8 @@ export const BalanceView: React.FC<Props> = ({
       const impactoIngresos = totalIngresosUSD > 0 ? (usd / totalIngresosUSD) * 100 : 0;
 
       return {
-        naturaleza: nat,
+        naturaleza: t.key,
+        label: t.label,
         totalBs: bs,
         totalUSD: usd,
         porcGasto,
@@ -770,7 +904,7 @@ export const BalanceView: React.FC<Props> = ({
                         ) : p.comisionUSD > 0 && p.id !== 'sin-puesto' ? (
                           <button
                             type="button"
-                            onClick={() => handlePagarComision(p)}
+                            onClick={() => handleAbrirModalPago(p)}
                             disabled={liquidandoPuestoId === p.id}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#166534] hover:bg-[#14532d] active:bg-[#0f3d21] text-white shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
                           >
@@ -1021,11 +1155,11 @@ export const BalanceView: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* 6. TABLA DESGLOSE POR NATURALEZA (Negocio, Créditos, Personal) */}
+        {/* 6. TABLA DESGLOSE POR NATURALEZA (Gastos vs Personal) */}
         <div className="bg-white border border-[#E4E4E7] rounded-lg overflow-hidden shadow-xs">
           <div className="bg-[#2C474E] text-white px-3.5 py-2 flex items-center justify-between">
             <span className="text-xs font-bold uppercase tracking-wider">
-              Desglose por Naturaleza (Operativo vs Personal)
+              Desglose por Naturaleza (Gastos vs Personal)
             </span>
           </div>
 
@@ -1178,6 +1312,156 @@ export const BalanceView: React.FC<Props> = ({
           </div>
         </div>
       </div>
+
+      {/* MODAL DE CONFIRMACIÓN: PAGO DE COMISIONES EN BOLÍVARES AL CAMBIO DEL DÍA */}
+      {pagoModalData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-zinc-200 w-full max-w-md overflow-hidden">
+            {/* Encabezado */}
+            <div className="bg-[#2C474E] text-white p-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-[#86EFAC]/20 rounded-lg text-[#86EFAC]">
+                  <CheckCircle2 size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold leading-tight">Pagar Comisión Semanal</h3>
+                  <p className="text-[11px] text-zinc-300">
+                    {pagoModalData.puestoNombre} • {rangoTexto} (Lun - Sáb)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPagoModalData(null)}
+                className="p-1 rounded-lg text-zinc-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Contenido */}
+            <div className="p-4 sm:p-5 space-y-4">
+              {/* Cifra acumulada en USD */}
+              <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-semibold text-zinc-500 block">
+                    Comisión Acumulada ({pagoModalData.comisionPorcentaje}%):
+                  </span>
+                  <span className="text-[10px] text-zinc-400">
+                    Congelada según tasa de cada día trabajado
+                  </span>
+                </div>
+                <div className="text-xl sm:text-2xl font-black font-mono text-[#047857] tabular-nums">
+                  {formatUSD(pagoModalData.comisionUSD)}
+                </div>
+              </div>
+
+              {/* Tasa BCV del día de pago */}
+              <div>
+                <label className="block text-xs font-bold text-[#18181B] mb-1.5">
+                  Tasa BCV del día de pago (Bs/$):
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="any"
+                    value={tasaPagoComision}
+                    onChange={(e) => setTasaPagoComision(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full p-2.5 text-sm font-mono font-bold border border-zinc-300 rounded-lg bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none"
+                  />
+                  <span className="absolute right-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
+                    Bs/$
+                  </span>
+                </div>
+                <span className="text-[10px] text-zinc-400 mt-0.5 block">
+                  Tasa oficial hoy: {formatNumber(tasaActual)} Bs/$. Editable si aplica otra tasa para el pago.
+                </span>
+              </div>
+
+              {/* Selector de Método de Pago en Bolívares */}
+              <div>
+                <label className="block text-xs font-bold text-[#18181B] mb-1.5">
+                  Método de pago en Bolívares:
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setMetodoPagoComision('pago_movil')}
+                    className={`p-2.5 rounded-lg border text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      metodoPagoComision === 'pago_movil'
+                        ? 'bg-[#2C474E] text-white border-[#2C474E] shadow-xs'
+                        : 'bg-zinc-50 text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+                    }`}
+                  >
+                    <Smartphone size={15} />
+                    <span>Pago Móvil</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMetodoPagoComision('efectivo_bs')}
+                    className={`p-2.5 rounded-lg border text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      metodoPagoComision === 'efectivo_bs'
+                        ? 'bg-[#2C474E] text-white border-[#2C474E] shadow-xs'
+                        : 'bg-zinc-50 text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+                    }`}
+                  >
+                    <Banknote size={15} />
+                    <span>Efectivo</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Monto exacto a transferir en Bolívares */}
+              <div className="p-3.5 bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl text-center">
+                <span className="text-xs font-bold text-[#065F46] block uppercase tracking-wider mb-0.5">
+                  Monto exacto a transferir:
+                </span>
+                <div className="text-2xl sm:text-3xl font-black font-mono text-[#166534] tabular-nums">
+                  {formatVES(
+                    Math.round(
+                      pagoModalData.comisionUSD * (parseFloat(tasaPagoComision) || tasaActual || 100) * 100
+                    ) / 100
+                  )}
+                </div>
+                <span className="text-[10px] text-[#059669] font-medium block mt-0.5">
+                  ({formatUSD(pagoModalData.comisionUSD)} × {formatNumber(parseFloat(tasaPagoComision) || tasaActual || 100)} Bs/$)
+                </span>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-zinc-50 border-t border-zinc-200 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPagoModalData(null)}
+                disabled={liquidandoPuestoId !== null}
+                className="px-4 py-2 text-xs font-bold text-zinc-600 hover:bg-zinc-200 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmarPago}
+                disabled={liquidandoPuestoId !== null}
+                className="px-4 py-2 text-xs font-bold bg-[#166534] hover:bg-[#14532d] active:bg-[#0f3d21] text-white rounded-lg flex items-center gap-1.5 transition-colors disabled:opacity-50 shadow-xs cursor-pointer"
+              >
+                {liquidandoPuestoId ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin text-white" />
+                    <span>Procesando pago...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={14} className="text-[#86EFAC]" />
+                    <span>Confirmar y Guardar Pago</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

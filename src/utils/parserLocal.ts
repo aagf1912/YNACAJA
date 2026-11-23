@@ -177,7 +177,7 @@ export function parseTextoLocal(
 
         let tipo: 'venta' | 'gasto' = esGasto ? 'gasto' : 'venta';
         let categoria = 'Ventas';
-        let naturaleza: 'Negocio' | 'Personal' | 'Créditos / Otros' = 'Negocio';
+        let naturaleza: 'Negocio' | 'Personal' = 'Negocio';
         let descripcion = chunk;
 
         if (tipo === 'venta') {
@@ -193,8 +193,8 @@ export function parseTextoLocal(
             naturaleza = 'Negocio';
             descripcion = 'Nómina / Sueldos';
           } else if (/\b(?:cashea|krece|cuotas?|prestamos?)\b/.test(norm)) {
-            categoria = 'Créditos (Cashea / Krece)';
-            naturaleza = 'Créditos / Otros';
+            categoria = 'Hielo y Varios Operativos';
+            naturaleza = 'Negocio';
             descripcion = norm.includes('cashea') ? 'Cuota Cashea' : norm.includes('krece') ? 'Cuota Krece' : 'Cuota Crédito';
           } else if (/\b(?:leche|pasta|espagueti|azucar|canela|vainilla|materia\s*prima)\b/.test(norm)) {
             categoria = 'Materia Prima';

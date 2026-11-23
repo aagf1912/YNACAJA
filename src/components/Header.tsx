@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Pencil, LogOut, Store } from 'lucide-react';
+import { Pencil, LogOut, Store, RefreshCw } from 'lucide-react';
 import { formatNumber } from '../utils/format';
 import { ModalTasa } from './ModalTasa';
 import { PerfilUsuario } from '../types';
@@ -7,6 +7,8 @@ import { PerfilUsuario } from '../types';
 interface Props {
   tasaDia: number;
   onActualizarTasa: (nuevaTasa: number) => Promise<void>;
+  onSincronizarBCV?: () => Promise<void>;
+  sincronizandoBCV?: boolean;
   perfil?: PerfilUsuario | null;
   onCerrarSesion: () => void;
   onAbrirGestionPuestos?: () => void;
@@ -15,6 +17,8 @@ interface Props {
 export const Header: React.FC<Props> = ({
   tasaDia,
   onActualizarTasa,
+  onSincronizarBCV,
+  sincronizandoBCV = false,
   perfil,
   onCerrarSesion,
   onAbrirGestionPuestos,
@@ -86,7 +90,7 @@ export const Header: React.FC<Props> = ({
                   type="button"
                   onClick={() => setModalAbierto(true)}
                   className="flex items-center gap-1.5 px-2 py-1.5 bg-[#23393e] hover:bg-[#1b2c30] active:bg-[#152326] border border-[#3d5e67] rounded text-xs font-semibold text-white transition-colors"
-                  title="Presiona para actualizar la tasa del día"
+                  title="Presiona para actualizar la tasa del día manualmente"
                 >
                   <span className="text-zinc-300 font-normal hidden xs:inline">Tasa:</span>
                   <span className="text-[#86EFAC] font-bold tabular-nums">
@@ -94,6 +98,19 @@ export const Header: React.FC<Props> = ({
                   </span>
                   <Pencil size={11} className="text-zinc-400" />
                 </button>
+
+                {onSincronizarBCV && (
+                  <button
+                    type="button"
+                    onClick={onSincronizarBCV}
+                    disabled={sincronizandoBCV}
+                    className="flex items-center gap-1 px-2 py-1.5 bg-[#166534] hover:bg-[#14532d] active:bg-[#0f3d21] border border-[#22c55e]/40 rounded text-xs font-bold text-white transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+                    title="Actualizar tasa oficial automáticamente desde BCV"
+                  >
+                    <RefreshCw size={12} className={sincronizandoBCV ? 'animate-spin text-[#86EFAC]' : 'text-[#86EFAC]'} />
+                    <span className="font-mono">↻ BCV</span>
+                  </button>
+                )}
               </>
             )}
 
