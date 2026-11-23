@@ -83,6 +83,7 @@ export const VendedorView: React.FC<Props> = ({
 
   // Estados de guardado, mensaje y toast
   const [guardando, setGuardando] = useState<boolean>(false);
+  const [tieneCierreGuardadoHoy, setTieneCierreGuardadoHoy] = useState<boolean>(false);
   const [toastMensaje, setToastMensaje] = useState<string | null>(null);
   const [mensajeExito, setMensajeExito] = useState<string | null>(null);
   const [mensajeError, setMensajeError] = useState<string | null>(null);
@@ -149,27 +150,33 @@ export const VendedorView: React.FC<Props> = ({
     );
   }, [liquidaciones, perfil.puesto_id, infoSemanaHoy.semanaInicio]);
 
-  // Cargar en el formulario ÚNICAMENTE los registros guardados de HOY
+  // Cargar en el formulario ÚNICAMENTE los registros guardados de HOY mediante fetch directo
   const cargarCierreDeHoy = useCallback(async () => {
-    let movsHoy = movimientos.filter(
+    let movsHoy: any[] = movimientos.filter(
       (m) =>
         (!perfil.puesto_id || m.puesto_id === perfil.puesto_id) &&
         m.fecha === fechaHoyVzla
     );
 
-    const client = supabase;
-    if (client && perfil.puesto_id) {
+    const token = getAccessTokenFromStorage() || supabaseAnonKey;
+    if (perfil.puesto_id) {
       try {
-        const { data, error } = await client
-          .from('movimientos')
-          .select('*')
-          .eq('puesto_id', perfil.puesto_id)
-          .eq('fecha', fechaHoyVzla);
-        if (!error && Array.isArray(data)) {
-          movsHoy = data;
+        const url = `${supabaseUrl}/rest/v1/movimientos?puesto_id=eq.${perfil.puesto_id}&fecha=eq.${fechaHoyVzla}&select=*`;
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: {
+            apikey: supabaseAnonKey,
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            movsHoy = data;
+          }
         }
       } catch (e) {
-        console.warn('Aviso cargando movimientos de hoy directo:', e);
+        console.warn('Aviso cargando movimientos de hoy directo via fetch:', e);
       }
     }
 
@@ -181,40 +188,56 @@ export const VendedorView: React.FC<Props> = ({
     let descGasto = '';
 
     for (const m of movsHoy) {
-      if (m.tipo === 'venta' || m.tipo === 'ingreso') {
-        const orig = Number(m.monto_original) || 0;
-        if (m.metodo_pago === 'efectivo_bs') efBs += orig;
-        else if (m.metodo_pago === 'pago_movil') pmBs += orig;
-        else if (m.metodo_pago === 'punto_venta') ptBs += orig;
-        else if (m.metodo_pago === 'divisa') divUSD += orig;
-      } else if (m.tipo === 'gasto' || m.tipo === 'egreso') {
-        const orig = Number(m.monto_original) || 0;
-        const tasa = Number(m.tasa ?? m.tasa_aplicada ?? tasaDia) || 100;
-        gastBs += m.moneda_original === 'USD' ? orig * tasa : orig;
-        if (m.descripcion && !descGasto) descGasto = m.descripcion;
+      const tipo = (m.tipo || '').toLowerCase();
+      const metodo = (m.metodo_pago || '').toLowerCase();
+      const orig = Number(m.monto_original) || 0;
+      const mBs = Number(m.monto_bs) || (m.moneda_original === 'VES' || m.moneda === 'VES' ? orig : 0);
+      const mUSD = Number(m.monto_usd) || (m.moneda_original === 'USD' || m.moneda === 'USD' ? orig : 0);
+
+      if (tipo === 'venta' || tipo === 'ingreso') {
+        if (metodo === 'efectivo_bs' || (metodo.includes('efectivo') && !metodo.includes('divisa'))) {
+          efBs += mBs || orig;
+        } else if (metodo === 'pago_movil' || metodo.includes('pago')) {
+          pmBs += mBs || orig;
+        } else if (metodo === 'punto_venta' || metodo.includes('punto')) {
+          ptBs += mBs || orig;
+        } else if (metodo === 'divisa' || metodo.includes('divisa') || metodo.includes('dolar') || metodo.includes('usd')) {
+          divUSD += mUSD || orig;
+        }
+      } else if (tipo === 'gasto' || tipo === 'egreso') {
+        if (m.categoria !== 'Sueldos / Comisiones') {
+          const tasa = Number(m.tasa ?? m.tasa_aplicada ?? tasaDia) || 100;
+          gastBs += (m.moneda_original === 'USD' || m.moneda === 'USD') ? orig * tasa : (mBs || orig);
+          if (m.descripcion && !descGasto) {
+            descGasto = m.descripcion.replace(/\s*-\s*.*$/, '').trim();
+          }
+        }
       }
     }
 
-    setMontoEfectivoBs(efBs > 0 ? String(efBs) : '');
-    setMontoPagoMovilBs(pmBs > 0 ? String(pmBs) : '');
-    setMontoPuntoVentaBs(ptBs > 0 ? String(ptBs) : '');
-    setMontoDivisasUSD(divUSD > 0 ? String(divUSD) : '');
+    const hayDatos = efBs > 0 || pmBs > 0 || ptBs > 0 || divUSD > 0 || gastBs > 0;
+    setTieneCierreGuardadoHoy(hayDatos);
 
-    if (gastBs > 0) {
-      setMostrarGastos(true);
-      setGastoBs(String(gastBs));
-      setGastoDescripcion(descGasto);
-    } else {
-      setMostrarGastos(false);
-      setGastoBs('');
-      setGastoDescripcion('');
+    if (hayDatos) {
+      setMontoEfectivoBs(efBs > 0 ? String(efBs) : '');
+      setMontoPagoMovilBs(pmBs > 0 ? String(pmBs) : '');
+      setMontoPuntoVentaBs(ptBs > 0 ? String(ptBs) : '');
+      setMontoDivisasUSD(divUSD > 0 ? String(divUSD) : '');
+
+      if (gastBs > 0) {
+        setMostrarGastos(true);
+        setGastoBs(String(gastBs));
+        setGastoDescripcion(descGasto);
+      }
     }
   }, [movimientos, perfil.puesto_id, fechaHoyVzla, tasaDia]);
 
-  // Al montar o cuando se actualicen los movimientos, sincronizar cierre de hoy
+  // Al montar, cuando se cambie de pestaña o se actualicen los movimientos, sincronizar cierre de hoy
   useEffect(() => {
-    cargarCierreDeHoy();
-  }, [cargarCierreDeHoy]);
+    if (tabActiva === 'cierre') {
+      cargarCierreDeHoy();
+    }
+  }, [tabActiva, cargarCierreDeHoy]);
 
   // Resumen en vivo de los montos que el vendedor escribe para hoy
   const resumenCierreHoy = useMemo(() => {
@@ -316,6 +339,7 @@ export const VendedorView: React.FC<Props> = ({
         throw new Error(errMsg);
       }
 
+      setTieneCierreGuardadoHoy(true);
       setToastMensaje('Cierre del día guardado correctamente');
       setMensajeExito('Cierre del día guardado correctamente');
       setTimeout(() => {
@@ -373,58 +397,50 @@ export const VendedorView: React.FC<Props> = ({
     return infoSemanaGanancias.dias.map((d) => {
       const movsDia = movimientosSemanaGanancias.filter((m) => m.fecha === d.fechaStr);
       let totalVentaUSD = 0;
-      let totalVentaBs = 0;
 
       for (const m of movsDia) {
         if (m.tipo === 'venta' || m.tipo === 'ingreso') {
           const tasa = Number(m.tasa ?? m.tasa_aplicada ?? tasaDia) || 100;
           const orig = Number(m.monto_original) || 0;
-          if (m.moneda_original === 'USD') {
+          if (m.moneda_original === 'USD' || m.moneda === 'USD') {
             totalVentaUSD += orig;
-            totalVentaBs += orig * tasa;
           } else {
-            totalVentaBs += orig;
             totalVentaUSD += tasa > 0 ? orig / tasa : 0;
           }
         }
       }
 
-      const comisionUSD = (totalVentaUSD * comisionPorcentaje) / 100;
+      const comisionUSD = Math.round(((totalVentaUSD * comisionPorcentaje) / 100) * 100) / 100;
 
       return {
         fechaStr: d.fechaStr,
         nombreDia: d.nombreDia,
         diaCorto: d.diaCorto,
         dateObj: d.dateObj,
-        totalVentaUSD,
-        totalVentaBs,
         comisionUSD,
         movimientosCount: movsDia.length,
       };
     });
   }, [infoSemanaGanancias.dias, movimientosSemanaGanancias, tasaDia, comisionPorcentaje]);
 
-  const { totalVendidoSemanaUSD, comisionSemanaUSD, mejorDiaIndex } = useMemo(() => {
-    let totalUSD = 0;
-    let maxDiaUSD = 0;
+  const { comisionSemanaUSD, mejorDiaIndex } = useMemo(() => {
+    let totalComision = 0;
+    let maxComisionUSD = 0;
     let mejorIdx = -1;
 
     datos6DiasGanancias.forEach((d, idx) => {
-      totalUSD += d.totalVentaUSD;
-      if (d.totalVentaUSD > maxDiaUSD) {
-        maxDiaUSD = d.totalVentaUSD;
+      totalComision += d.comisionUSD;
+      if (d.comisionUSD > maxComisionUSD) {
+        maxComisionUSD = d.comisionUSD;
         mejorIdx = idx;
       }
     });
 
-    const comision = (totalUSD * comisionPorcentaje) / 100;
-
     return {
-      totalVendidoSemanaUSD: totalUSD,
-      comisionSemanaUSD: comision,
-      mejorDiaIndex: maxDiaUSD > 0 ? mejorIdx : -1,
+      comisionSemanaUSD: totalComision,
+      mejorDiaIndex: maxComisionUSD > 0 ? mejorIdx : -1,
     };
-  }, [datos6DiasGanancias, comisionPorcentaje]);
+  }, [datos6DiasGanancias]);
 
   // Día seleccionado en el gráfico interactivo de Mis Ganancias (0 a 5)
   const [diaGananciasIndex, setDiaGananciasIndex] = useState<number>(0);
@@ -434,31 +450,32 @@ export const VendedorView: React.FC<Props> = ({
   const variacionDiaAnterior = useMemo(() => {
     if (diaGananciasIndex === 0) return null;
     const diaPrev = datos6DiasGanancias[diaGananciasIndex - 1];
-    const prevUSD = diaPrev?.totalVentaUSD || 0;
-    const currUSD = diaDetalleTrading?.totalVentaUSD || 0;
+    const prevUSD = diaPrev?.comisionUSD || 0;
+    const currUSD = diaDetalleTrading?.comisionUSD || 0;
 
     if (prevUSD === 0 && currUSD === 0) return 0;
     if (prevUSD === 0 && currUSD > 0) return 100;
     return ((currUSD - prevUSD) / prevUSD) * 100;
   }, [diaGananciasIndex, datos6DiasGanancias, diaDetalleTrading]);
 
-  // Coordenadas SVG Trading
+  // Coordenadas SVG Trading (calculadas EXCLUSIVAMENTE con la ganancia/comisión del vendedor en $)
   const svgTradingCoords = useMemo(() => {
     const W = 500;
     const H = 180;
-    const padL = 40;
+    const padL = 42;
     const padR = 20;
     const padT = 25;
     const padB = 35;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
 
-    const maxVal = Math.max(...datos6DiasGanancias.map((d) => d.totalVentaUSD), 10) * 1.15;
+    // Eje Y basado exclusivamente en la ganancia del vendedor
+    const maxVal = Math.max(...datos6DiasGanancias.map((d) => d.comisionUSD), 5) * 1.15;
 
     const points = datos6DiasGanancias.map((d, i) => {
       const x = padL + i * (plotW / 5);
-      const y = padT + (1 - d.totalVentaUSD / maxVal) * plotH;
-      return { x, y, val: d.totalVentaUSD, dia: d.diaCorto };
+      const y = padT + (1 - d.comisionUSD / maxVal) * plotH;
+      return { x, y, val: d.comisionUSD, dia: d.diaCorto };
     });
 
     const linePath = points.reduce((acc, pt, i) => {
@@ -771,7 +788,17 @@ export const VendedorView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* BOTÓN GUARDAR CIERRE DEL DÍA */}
+          {/* AVISO VERDE SI YA HAY CIERRE GUARDADO HOY */}
+          {tieneCierreGuardadoHoy && (
+            <div className="p-3 bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl text-xs text-[#065F46] flex items-center gap-2">
+              <CheckCircle2 size={16} className="text-[#10B981] shrink-0" />
+              <span className="font-semibold">
+                ✓ Cierre de hoy guardado (podés modificar los montos si necesitás corregir algo)
+              </span>
+            </div>
+          )}
+
+          {/* BOTÓN GUARDAR / ACTUALIZAR CIERRE DEL DÍA */}
           <button
             type="button"
             onClick={handleGuardarCierre}
@@ -781,12 +808,14 @@ export const VendedorView: React.FC<Props> = ({
             {guardando ? (
               <>
                 <Loader2 size={16} className="animate-spin text-white" />
-                <span>Guardando Cierre del Día...</span>
+                <span>{tieneCierreGuardadoHoy ? 'Actualizando Cierre del Día...' : 'Guardando Cierre del Día...'}</span>
               </>
             ) : (
               <>
                 <CheckCircle2 size={17} className="text-[#86EFAC]" />
-                <span>Guardar Cierre del Día ({fechaHoyTexto})</span>
+                <span>
+                  {tieneCierreGuardadoHoy ? 'Actualizar Cierre del Día' : `Guardar Cierre del Día (${fechaHoyTexto})`}
+                </span>
               </>
             )}
           </button>
@@ -812,7 +841,7 @@ export const VendedorView: React.FC<Props> = ({
          ====================================================================== */}
       {tabActiva === 'ganancias' && (
         <div className="space-y-4">
-          {/* TARJETA OSCURA CON RESUMEN SEMANAL */}
+          {/* TARJETA OSCURA CON RESUMEN SEMANAL (EXCLUSIVAMENTE GANANCIAS) */}
           <div className="bg-gradient-to-br from-[#2C474E] to-[#1a2d32] text-white rounded-xl p-4 sm:p-5 shadow-sm border border-[#23393e]">
             <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-3">
               <div className="flex items-center gap-2">
@@ -827,39 +856,34 @@ export const VendedorView: React.FC<Props> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 items-end">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
               <div>
-                <span className="text-[11px] text-zinc-300 block mb-0.5 font-medium">
-                  Vendido esta Semana ($):
+                <span className="text-xs text-emerald-300/90 block mb-1 font-semibold flex items-center gap-1.5">
+                  <Sparkles size={14} className="text-[#86EFAC]" />
+                  Tu Ganancia de la Semana ({comisionPorcentaje}%):
                 </span>
-                <div className="text-xl sm:text-2xl font-black tabular-nums text-white">
-                  {formatUSD(totalVendidoSemanaUSD)}
+                <div className="text-3xl sm:text-4xl font-black tabular-nums text-[#86EFAC] font-mono tracking-tight">
+                  {formatUSD(comisionSemanaUSD)}
                 </div>
-                <span className="text-[10px] text-zinc-300">
-                  {infoSemanaGanancias.rangoTexto}
-                </span>
+                <div className="text-xs text-zinc-300 mt-1 flex items-center gap-2">
+                  <span>{infoSemanaGanancias.rangoTexto}</span>
+                  <span className="text-zinc-500">•</span>
+                  <span>Lun - Sáb</span>
+                </div>
               </div>
 
-              <div className="bg-[#86EFAC]/15 border border-[#86EFAC]/30 rounded-lg p-2.5 text-right">
-                <span className="text-[11px] font-bold text-[#86EFAC] block mb-0.5">
-                  Tu Sueldo ({comisionPorcentaje}%):
-                </span>
-                <div className="text-lg sm:text-2xl font-black tabular-nums text-[#86EFAC] font-mono">
-                  ({formatUSD(comisionSemanaUSD)})
-                </div>
-                <div className="mt-1">
-                  {semanaGananciasPagada ? (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#166534] text-white border border-[#22c55e]">
-                      <CheckCircle2 size={11} />
-                      <span>Pagado ✓</span>
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40">
-                      <Clock size={11} />
-                      <span>Pendiente</span>
-                    </span>
-                  )}
-                </div>
+              <div className="sm:text-right">
+                {semanaGananciasPagada ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-[#166534] text-white border border-[#22c55e] shadow-xs">
+                    <CheckCircle2 size={14} />
+                    <span>Pagado ✓</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40">
+                    <Clock size={14} />
+                    <span>Pendiente</span>
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -926,12 +950,12 @@ export const VendedorView: React.FC<Props> = ({
                     </span>
                   )}
                 </div>
-                <div className="flex items-baseline gap-2 mt-0.5">
-                  <span className="text-lg font-black tabular-nums text-[#18181B]">
-                    {formatUSD(diaDetalleTrading.totalVentaUSD)}
+                <div className="flex items-baseline gap-2 mt-1">
+                  <span className="text-xl sm:text-2xl font-black tabular-nums text-[#047857] font-mono">
+                    {formatUSD(diaDetalleTrading.comisionUSD)}
                   </span>
-                  <span className="text-xs font-bold text-[#047857] font-mono">
-                    Comisión: ({formatUSD(diaDetalleTrading.comisionUSD)})
+                  <span className="text-[11px] font-semibold text-zinc-500">
+                    Ganancia ({comisionPorcentaje}%)
                   </span>
                 </div>
               </div>
@@ -1077,8 +1101,8 @@ export const VendedorView: React.FC<Props> = ({
           {/* LISTA DETALLADA DE GANANCIAS POR DÍA (Lunes a Sábado - Solo Lectura) */}
           <div className="bg-white border border-[#E4E4E7] rounded-xl overflow-hidden shadow-xs divide-y divide-[#E4E4E7]">
             <div className="bg-[#FAFAFA] px-3.5 py-2.5 flex items-center justify-between text-xs font-bold text-[#52525B]">
-              <span>Rendimiento Diario (Lun - Sáb)</span>
-              <span>Venta / Comisión</span>
+              <span>Ganancias Diarias (Lun - Sáb)</span>
+              <span>Ganancia ($)</span>
             </div>
 
             {datos6DiasGanancias.map((d, i) => {
@@ -1100,12 +1124,12 @@ export const VendedorView: React.FC<Props> = ({
                         {d.nombreDia} {d.dateObj.getDate()}
                       </span>
                       {esHoy && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-[#2C474E] text-white">
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#2C474E] text-white">
                           Hoy
                         </span>
                       )}
                       {esMejor && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
                           ★ Mejor día
                         </span>
                       )}
@@ -1116,11 +1140,8 @@ export const VendedorView: React.FC<Props> = ({
                   </div>
 
                   <div className="text-right">
-                    <span className="text-xs sm:text-sm font-bold text-[#18181B] tabular-nums block">
-                      {formatUSD(d.totalVentaUSD)}
-                    </span>
-                    <span className="text-[11px] font-mono font-bold text-[#047857] block tabular-nums">
-                      Comisión: ({formatUSD(d.comisionUSD)})
+                    <span className="text-sm sm:text-base font-black font-mono text-[#047857] tabular-nums block">
+                      {formatUSD(d.comisionUSD)}
                     </span>
                   </div>
                 </div>
