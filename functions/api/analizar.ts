@@ -1,5 +1,5 @@
 // Cloudflare Pages Function: functions/api/analizar.ts
-// Backend serverless para analizar texto de ventas y gastos de Chicha Adictiva usando Gemini 2.5 Flash
+// Backend serverless para analizar texto de ventas y gastos de Chicha Adictiva usando Gemini 3.8 Flash
 
 interface Env {
   GEMINI_API_KEY: string;
@@ -152,7 +152,7 @@ Reglas estrictas de clasificación:
       },
     };
 
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
 
     const geminiRes = await fetch(geminiUrl, {
       method: 'POST',
