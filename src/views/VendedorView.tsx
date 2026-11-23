@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   ClipboardPaste,
   Plus,
@@ -17,6 +17,7 @@ import { formatMontoMovimiento, formatNumber, formatUSD } from '../utils/format'
 import { getVenezuelaDate, parseTextoLocal } from '../utils/parserLocal';
 import { analizarTextoMovimientos } from '../services/api';
 import { ModalMovimiento } from '../components/ModalMovimiento';
+import { getVentasHoyPuesto, supabase } from '../services/supabase';
 import { Clipboard as CapClipboard } from '@capacitor/clipboard';
 
 interface Props {
@@ -43,18 +44,89 @@ export const VendedorView: React.FC<Props> = ({
   const [modalManualAbierto, setModalManualAbierto] = useState(false);
   const [movimientoParaEditar, setMovimientoParaEditar] = useState<Movimiento | null>(null);
 
+  const [ventasHoy, setVentasHoy] = useState<Movimiento[]>([]);
+  const [cargandoVentas, setCargandoVentas] = useState<boolean>(false);
+
   const fechaHoyVzla = useMemo(() => getVenezuelaDate(), []);
   const comisionPorcentaje = perfil.puesto?.porcentaje_comision ?? 22.0;
 
+  // Cargar ventas de hoy directamente desde Supabase
+  const cargarVentasHoy = useCallback(async () => {
+    if (!perfil.puesto_id) return;
+    setCargandoVentas(true);
+    try {
+      const data = await getVentasHoyPuesto(perfil.puesto_id, fechaHoyVzla);
+      if (data && data.length > 0) {
+        setVentasHoy(data);
+        return;
+      }
+      // Si Supabase devuelve lista vacía o falla, filtrar de props
+      const filtrados = movimientos.filter((m) => {
+        const esHoy = m.fecha === fechaHoyVzla;
+        const esVenta = m.tipo === 'ingreso' || m.tipo === 'venta';
+        const esMismoPuesto = !perfil.puesto_id || m.puesto_id === perfil.puesto_id;
+        return esHoy && esVenta && esMismoPuesto;
+      });
+      setVentasHoy(filtrados);
+    } catch (err) {
+      console.warn('Error al cargar ventas hoy desde Supabase:', err);
+    } finally {
+      setCargandoVentas(false);
+    }
+  }, [perfil.puesto_id, fechaHoyVzla, movimientos]);
+
+  useEffect(() => {
+    cargarVentasHoy();
+  }, [cargarVentasHoy]);
+
+  // Si cambian los movimientos desde el padre (App.tsx), sincronizar
+  useEffect(() => {
+    if (movimientos && movimientos.length > 0) {
+      const filtrados = movimientos.filter((m) => {
+        const esHoy = m.fecha === fechaHoyVzla;
+        const esVenta = m.tipo === 'ingreso' || m.tipo === 'venta';
+        const esMismoPuesto = !perfil.puesto_id || m.puesto_id === perfil.puesto_id;
+        return esHoy && esVenta && esMismoPuesto;
+      });
+      setVentasHoy(filtrados);
+    }
+  }, [movimientos, fechaHoyVzla, perfil.puesto_id]);
+
+  // Suscripción en tiempo real a Supabase para este puesto
+  useEffect(() => {
+    const client = supabase;
+    if (!client || !perfil.puesto_id) return;
+
+    const channel = client
+      .channel(`rt-vendedor-movimientos-${perfil.puesto_id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'movimientos',
+          filter: `puesto_id=eq.${perfil.puesto_id}`,
+        },
+        () => {
+          cargarVentasHoy();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client.removeChannel(channel);
+    };
+  }, [perfil.puesto_id, cargarVentasHoy]);
+
   // Filtrar ventas de HOY para este puesto específico
   const ventasHoyPuesto = useMemo(() => {
-    return movimientos.filter((m) => {
+    return ventasHoy.filter((m) => {
       const esHoy = m.fecha === fechaHoyVzla;
-      const esVenta = m.tipo === 'venta';
+      const esVenta = m.tipo === 'ingreso' || m.tipo === 'venta';
       const esMismoPuesto = !perfil.puesto_id || m.puesto_id === perfil.puesto_id;
       return esHoy && esVenta && esMismoPuesto;
     });
-  }, [movimientos, fechaHoyVzla, perfil.puesto_id]);
+  }, [ventasHoy, fechaHoyVzla, perfil.puesto_id]);
 
   // Total vendido hoy en USD y ganancia de comisión (22%)
   const { totalVendidoHoyUSD, comisionHoyUSD } = useMemo(() => {
@@ -151,23 +223,35 @@ export const VendedorView: React.FC<Props> = ({
         return;
       }
 
-      // Preparar para guardar forzando tipo venta, puesto_id y creado_por
-      const aGuardar: Omit<Movimiento, 'id' | 'created_at'>[] = extraidos.map((m) => ({
-        fecha: m.fecha || fechaHoyVzla,
-        descripcion: m.descripcion || 'Venta',
-        tipo: 'venta',
-        naturaleza: 'Negocio',
-        categoria: 'Ventas',
-        metodo_pago: m.metodo_pago,
-        moneda_original: m.moneda_original,
-        monto_original: m.monto_original,
-        tasa_aplicada: tasaDia,
-        puesto_id: perfil.puesto_id,
-        creado_por: perfil.id,
-      }));
+      // Preparar para guardar forzando tipo ingreso, puesto_id, user_id y montos
+      const aGuardar: Omit<Movimiento, 'id' | 'created_at'>[] = extraidos.map((m) => {
+        const tasa = Number(tasaDia) || Number((m as any).tasa_aplicada) || 100;
+        const montoNum = Number(m.monto_original) || 0;
+        const monto_usd = m.moneda_original === 'USD' ? montoNum : (tasa > 0 ? montoNum / tasa : 0);
+        const monto_bs = m.moneda_original === 'USD' ? montoNum * tasa : montoNum;
+
+        return {
+          fecha: m.fecha || fechaHoyVzla,
+          descripcion: m.descripcion || 'Venta',
+          tipo: 'ingreso' as const,
+          naturaleza: 'Negocio' as const,
+          categoria: 'Ventas' as const,
+          metodo_pago: m.metodo_pago,
+          moneda_original: m.moneda_original,
+          monto_original: m.monto_original,
+          tasa_aplicada: tasa,
+          tasa: tasa,
+          monto_bs: Math.round(monto_bs * 100) / 100,
+          monto_usd: Math.round(monto_usd * 100) / 100,
+          puesto_id: perfil.puesto_id,
+          creado_por: perfil.id,
+          user_id: perfil.id,
+        };
+      });
 
       const guardados = await onGuardarMovimientos(aGuardar);
       setTexto('');
+      await cargarVentasHoy();
       setMensajeExito(`¡Excelente! Se registraron ${guardados.length} ventas correctamente.`);
       setTimeout(() => setMensajeExito(null), 5000);
     } catch (err: any) {
@@ -180,13 +264,24 @@ export const VendedorView: React.FC<Props> = ({
   const handleGuardarManual = async (
     mov: Omit<Movimiento, 'id' | 'created_at'> & { id?: string }
   ) => {
+    const tasa = Number(tasaDia) || Number(mov.tasa_aplicada) || 100;
+    const montoNum = Number(mov.monto_original) || 0;
+    const monto_usd = mov.moneda_original === 'USD' ? montoNum : (tasa > 0 ? montoNum / tasa : 0);
+    const monto_bs = mov.moneda_original === 'USD' ? montoNum * tasa : montoNum;
+
     const movConPuesto = {
       ...mov,
-      tipo: 'venta' as const,
+      fecha: mov.fecha || fechaHoyVzla,
+      tipo: 'ingreso' as const,
       categoria: 'Ventas' as const,
       naturaleza: 'Negocio' as const,
+      tasa_aplicada: tasa,
+      tasa: tasa,
+      monto_bs: Math.round(monto_bs * 100) / 100,
+      monto_usd: Math.round(monto_usd * 100) / 100,
       puesto_id: perfil.puesto_id,
       creado_por: perfil.id,
+      user_id: perfil.id,
     };
 
     if (mov.id) {
@@ -194,11 +289,13 @@ export const VendedorView: React.FC<Props> = ({
     } else {
       await onGuardarMovimientos([movConPuesto]);
     }
+    await cargarVentasHoy();
   };
 
   const handleEliminarVenta = async (id: string) => {
     if (window.confirm('¿Deseas eliminar este registro de venta?')) {
       await onEliminarMovimiento(id);
+      await cargarVentasHoy();
     }
   };
 

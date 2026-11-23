@@ -119,7 +119,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
 
       for (const m of movimientosSemanaFiltrados) {
         const { monto_usd, monto_bs } = calcularMontos(m);
-        if (m.tipo === 'venta') {
+        if (m.tipo === 'venta' || m.tipo === 'ingreso') {
           ingUSD += monto_usd;
           ingBs += monto_bs;
         } else {
@@ -142,7 +142,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
   const resumenPorPuesto = useMemo(() => {
     const items = puestos.map((p) => {
       const ventasPuesto = movimientosSemana.filter(
-        (m) => m.tipo === 'venta' && m.puesto_id === p.id
+        (m) => (m.tipo === 'venta' || m.tipo === 'ingreso') && m.puesto_id === p.id
       );
       let totalUSD = 0;
       let totalBs = 0;
@@ -171,7 +171,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
 
     // Detectar si hay ventas registradas sin puesto
     const ventasSinPuesto = movimientosSemana.filter(
-      (m) => m.tipo === 'venta' && !m.puesto_id
+      (m) => (m.tipo === 'venta' || m.tipo === 'ingreso') && !m.puesto_id
     );
     if (ventasSinPuesto.length > 0) {
       let totalSinPuestoUSD = 0;
@@ -215,7 +215,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
     };
 
     for (const m of movimientosSemanaFiltrados) {
-      if (m.tipo === 'venta') {
+      if (m.tipo === 'venta' || m.tipo === 'ingreso') {
         const { monto_usd, monto_bs } = calcularMontos(m);
         if (metodos[m.metodo_pago]) {
           metodos[m.metodo_pago].bs += monto_bs;
@@ -238,7 +238,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
 
       for (const m of movsDia) {
         const { monto_usd, monto_bs } = calcularMontos(m);
-        if (m.tipo === 'venta') {
+        if (m.tipo === 'venta' || m.tipo === 'ingreso') {
           ingBs += monto_bs;
           ingUSD += monto_usd;
         } else {
@@ -290,7 +290,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
     }
 
     for (const m of movimientosSemanaFiltrados) {
-      if (m.tipo === 'gasto') {
+      if (m.tipo === 'gasto' || m.tipo === 'egreso') {
         const { monto_usd, monto_bs } = calcularMontos(m);
         if (!mapa[m.categoria]) {
           mapa[m.categoria] = {
@@ -335,7 +335,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
       let usd = 0;
 
       for (const m of movimientosSemanaFiltrados) {
-        if (m.tipo === 'gasto' && m.naturaleza === nat) {
+        if ((m.tipo === 'gasto' || m.tipo === 'egreso') && m.naturaleza === nat) {
           const { monto_usd, monto_bs } = calcularMontos(m);
           bs += monto_bs;
           usd += monto_usd;

@@ -177,7 +177,7 @@ export const ModalMovimiento: React.FC<Props> = ({
                   type="button"
                   onClick={() => handleTipoChange('venta')}
                   className={`py-1.5 px-3 rounded font-bold border text-center transition-colors ${
-                    tipo === 'venta'
+                    tipo === 'venta' || tipo === 'ingreso'
                       ? 'bg-[#166534] text-white border-[#166534]'
                       : 'bg-[#F4F4F5] text-[#52525B] border-[#E4E4E7] hover:bg-zinc-200'
                   }`}
@@ -188,7 +188,7 @@ export const ModalMovimiento: React.FC<Props> = ({
                   type="button"
                   onClick={() => handleTipoChange('gasto')}
                   className={`py-1.5 px-3 rounded font-bold border text-center transition-colors ${
-                    tipo === 'gasto'
+                    tipo === 'gasto' || tipo === 'egreso'
                       ? 'bg-[#991B1B] text-white border-[#991B1B]'
                       : 'bg-[#F4F4F5] text-[#52525B] border-[#E4E4E7] hover:bg-zinc-200'
                   }`}
@@ -250,7 +250,7 @@ export const ModalMovimiento: React.FC<Props> = ({
           </div>
 
           {/* Categoría (solo para gastos) */}
-          {tipo === 'gasto' && !soloVenta && (
+          {(tipo === 'gasto' || tipo === 'egreso') && !soloVenta && (
             <div>
               <label className="block text-[11px] font-semibold text-[#52525B] mb-1">
                 Categoría del Gasto (9 oficiales)

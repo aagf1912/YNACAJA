@@ -1,4 +1,4 @@
-export type TipoMovimiento = 'venta' | 'gasto';
+export type TipoMovimiento = 'venta' | 'gasto' | 'ingreso' | 'egreso';
 
 export type NaturalezaMovimiento = 'Negocio' | 'Personal' | 'Créditos / Otros';
 
@@ -56,8 +56,12 @@ export interface Movimiento {
   moneda_original: MonedaOriginal;
   monto_original: number;
   tasa_aplicada: number;
+  tasa?: number;
+  monto_bs?: number;
+  monto_usd?: number;
   puesto_id?: string | null;
   creado_por?: string | null;
+  user_id?: string | null;
   puesto?: Puesto | null;
   created_at?: string;
 }

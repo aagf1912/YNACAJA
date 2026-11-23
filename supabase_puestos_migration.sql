@@ -537,3 +537,64 @@ GRANT EXECUTE ON FUNCTION public.crear_puesto_con_vendedor(TEXT, NUMERIC, TEXT, 
 GRANT EXECUTE ON FUNCTION public.asignar_vendedor_a_puesto(UUID, TEXT, TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.actualizar_credenciales_puesto(UUID, TEXT, TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.obtener_usuarios_puestos() TO authenticated;
+
+-- 10. Asegurar columnas adicionales de sincronización en movimientos
+ALTER TABLE public.movimientos ADD COLUMN IF NOT EXISTS monto_bs NUMERIC(15,2);
+ALTER TABLE public.movimientos ADD COLUMN IF NOT EXISTS monto_usd NUMERIC(15,2);
+ALTER TABLE public.movimientos ADD COLUMN IF NOT EXISTS tasa NUMERIC(15,2);
+ALTER TABLE public.movimientos ADD COLUMN IF NOT EXISTS user_id UUID;
+
+CREATE OR REPLACE FUNCTION public.sync_movimientos_columns()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_tasa NUMERIC;
+BEGIN
+    IF NEW.user_id IS NOT NULL AND NEW.creado_por IS NULL THEN
+        NEW.creado_por := NEW.user_id;
+    ELSIF NEW.creado_por IS NOT NULL AND NEW.user_id IS NULL THEN
+        NEW.user_id := NEW.creado_por;
+    ELSIF NEW.user_id IS NULL AND NEW.creado_por IS NULL THEN
+        NEW.user_id := auth.uid();
+        NEW.creado_por := auth.uid();
+    END IF;
+
+    IF NEW.tasa IS NOT NULL AND NEW.tasa_aplicada IS NULL THEN
+        NEW.tasa_aplicada := NEW.tasa;
+    ELSIF NEW.tasa_aplicada IS NOT NULL AND NEW.tasa IS NULL THEN
+        NEW.tasa := NEW.tasa_aplicada;
+    END IF;
+
+    v_tasa := COALESCE(NEW.tasa_aplicada, NEW.tasa, 1.0);
+    IF v_tasa <= 0 THEN v_tasa := 1.0; END IF;
+
+    IF NEW.moneda_original = 'USD' THEN
+        NEW.monto_usd := COALESCE(NEW.monto_usd, NEW.monto_original);
+        NEW.monto_bs := COALESCE(NEW.monto_bs, ROUND(NEW.monto_original * v_tasa, 2));
+    ELSE
+        NEW.monto_bs := COALESCE(NEW.monto_bs, NEW.monto_original);
+        NEW.monto_usd := COALESCE(NEW.monto_usd, ROUND(NEW.monto_original / v_tasa, 2));
+    END IF;
+
+    IF NEW.categoria IS NULL THEN
+        IF NEW.tipo IN ('ingreso', 'venta') THEN
+            NEW.categoria := 'Ventas';
+        ELSE
+            NEW.categoria := 'Gastos Varios';
+        END IF;
+    END IF;
+
+    IF NEW.tipo IS NULL OR NEW.tipo = '' THEN
+        NEW.tipo := 'ingreso';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_sync_movimientos_columns
+BEFORE INSERT OR UPDATE ON public.movimientos
+FOR EACH ROW
+EXECUTE FUNCTION public.sync_movimientos_columns();
+
+-- Habilitar tabla movimientos en Realtime para sincronización instantánea
+ALTER PUBLICATION supabase_realtime ADD TABLE public.movimientos;

@@ -111,6 +111,27 @@ export const App: React.FC = () => {
     }
   }, [perfil, cargarDatos]);
 
+  // Suscripción en tiempo real a cambios en la tabla movimientos
+  useEffect(() => {
+    const client = supabase;
+    if (!client || !perfil) return;
+
+    const channel = client
+      .channel('realtime-movimientos-global')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'movimientos' },
+        () => {
+          cargarDatos();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client.removeChannel(channel);
+    };
+  }, [perfil, cargarDatos]);
+
   // Manejo de actualización de tasa
   const handleActualizarTasa = async (nuevaTasa: number) => {
     const updated = await updateTasaDia(nuevaTasa);

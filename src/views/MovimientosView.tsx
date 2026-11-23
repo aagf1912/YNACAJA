@@ -49,10 +49,10 @@ export const MovimientosView: React.FC<Props> = ({
       }
 
       // Filtro tipo / naturaleza
-      if (filtro === 'ventas' && m.tipo !== 'venta') return false;
-      if (filtro === 'negocio' && (m.tipo !== 'gasto' || m.naturaleza !== 'Negocio')) return false;
-      if (filtro === 'personal' && (m.tipo !== 'gasto' || m.naturaleza !== 'Personal')) return false;
-      if (filtro === 'creditos' && (m.tipo !== 'gasto' || m.naturaleza !== 'Créditos / Otros')) return false;
+      if (filtro === 'ventas' && m.tipo !== 'venta' && m.tipo !== 'ingreso') return false;
+      if (filtro === 'negocio' && ((m.tipo !== 'gasto' && m.tipo !== 'egreso') || m.naturaleza !== 'Negocio')) return false;
+      if (filtro === 'personal' && ((m.tipo !== 'gasto' && m.tipo !== 'egreso') || m.naturaleza !== 'Personal')) return false;
+      if (filtro === 'creditos' && ((m.tipo !== 'gasto' && m.tipo !== 'egreso') || m.naturaleza !== 'Créditos / Otros')) return false;
 
       // Búsqueda por texto
       if (busqueda.trim()) {
@@ -87,7 +87,7 @@ export const MovimientosView: React.FC<Props> = ({
 
       for (const item of items) {
         const { monto_usd } = calcularMontos(item);
-        if (item.tipo === 'venta') {
+        if (item.tipo === 'venta' || item.tipo === 'ingreso') {
           totalIngresosUSD += monto_usd;
         } else {
           totalGastosUSD += monto_usd;

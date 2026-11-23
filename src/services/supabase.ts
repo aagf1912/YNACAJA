@@ -1,5 +1,5 @@
 import { createClient, User } from '@supabase/supabase-js';
-import { ConfigNegocio, Movimiento, PerfilUsuario, Puesto, RolUsuario } from '../types';
+import { ConfigNegocio, Movimiento, PerfilUsuario, Puesto, RolUsuario, TipoMovimiento } from '../types';
 
 // Fallback de configuración pública de Supabase para builds web (ej. Cloudflare Pages)
 const FALLBACK_SUPABASE_URL = 'https://xbjywyzuhtbmuusytsty.supabase.co';
@@ -557,15 +557,32 @@ export async function getMovimientos(rol?: RolUsuario, puestoId?: string | null)
         .order('fecha', { ascending: false })
         .order('created_at', { ascending: false });
 
+      // Si es vendedor, filtrar únicamente por su puesto
       if (rol === 'vendedor' && puestoId) {
         query = query.eq('puesto_id', puestoId);
       }
+      // Si es admin, NO filtrar por user_id: se cargan TODOS los registros
 
       const { data, error } = await query;
 
       if (!error && data) {
-        setLocalMovimientos(data);
-        return data;
+        // Cruzar con puestos para asegurar que todos los movimientos tengan su puesto asociado
+        const puestosMap: Record<string, Puesto> = {};
+        try {
+          const pts = await getPuestos();
+          for (const p of pts) {
+            puestosMap[p.id] = p;
+          }
+        } catch {}
+
+        const movimientosCompletos: Movimiento[] = data.map((item: any) => ({
+          ...item,
+          tipo: item.tipo as TipoMovimiento,
+          puesto: item.puesto || (item.puesto_id ? puestosMap[item.puesto_id] || null : null),
+        }));
+
+        setLocalMovimientos(movimientosCompletos);
+        return movimientosCompletos;
       }
       console.warn('Supabase movimientos fetch error:', error?.message);
     } catch (err) {
@@ -575,14 +592,63 @@ export async function getMovimientos(rol?: RolUsuario, puestoId?: string | null)
   return getLocalMovimientos();
 }
 
+/**
+ * Consulta en tiempo real las ventas de HOY para un puesto específico directamente en Supabase
+ */
+export async function getVentasHoyPuesto(puestoId: string, fecha: string): Promise<Movimiento[]> {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('movimientos')
+        .select('*, puesto:puestos(*)')
+        .eq('puesto_id', puestoId)
+        .eq('fecha', fecha)
+        .in('tipo', ['ingreso', 'venta'])
+        .order('created_at', { ascending: false });
+
+      if (!error && data) {
+        return data.map((item: any) => ({
+          ...item,
+          tipo: item.tipo as TipoMovimiento,
+        }));
+      }
+      console.warn('Error consultando ventas hoy en Supabase:', error?.message);
+    } catch (err) {
+      console.warn('Fallo de red al consultar ventas hoy:', err);
+    }
+  }
+
+  // Fallback local
+  return getLocalMovimientos().filter(
+    (m) =>
+      m.puesto_id === puestoId &&
+      m.fecha === fecha &&
+      (m.tipo === 'ingreso' || m.tipo === 'venta')
+  );
+}
+
 export async function insertMovimientos(
   movs: Omit<Movimiento, 'id' | 'created_at' | 'puesto'>[]
 ): Promise<Movimiento[]> {
-  const newItems: Movimiento[] = movs.map((m) => ({
-    ...m,
-    id: crypto.randomUUID ? crypto.randomUUID() : `mov_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-    created_at: new Date().toISOString(),
-  }));
+  const newItems: Movimiento[] = movs.map((m) => {
+    const tasa = Number(m.tasa ?? m.tasa_aplicada ?? 100);
+    const montoOrig = Number(m.monto_original) || 0;
+    const monto_usd = m.monto_usd ?? (m.moneda_original === 'USD' ? montoOrig : (tasa > 0 ? montoOrig / tasa : 0));
+    const monto_bs = m.monto_bs ?? (m.moneda_original === 'USD' ? montoOrig * tasa : montoOrig);
+    const userId = m.user_id || m.creado_por || null;
+
+    return {
+      ...m,
+      id: crypto.randomUUID ? crypto.randomUUID() : `mov_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      created_at: new Date().toISOString(),
+      tasa_aplicada: tasa,
+      tasa: tasa,
+      monto_bs: Math.round(monto_bs * 100) / 100,
+      monto_usd: Math.round(monto_usd * 100) / 100,
+      creado_por: userId,
+      user_id: userId,
+    };
+  });
 
   if (supabase) {
     try {
@@ -597,8 +663,12 @@ export async function insertMovimientos(
         moneda_original: item.moneda_original,
         monto_original: item.monto_original,
         tasa_aplicada: item.tasa_aplicada,
+        tasa: item.tasa ?? item.tasa_aplicada,
+        monto_bs: item.monto_bs,
+        monto_usd: item.monto_usd,
         puesto_id: item.puesto_id || null,
-        creado_por: item.creado_por || null,
+        creado_por: item.creado_por || item.user_id || null,
+        user_id: item.user_id || item.creado_por || null,
       }));
 
       const { data, error } = await supabase
@@ -612,9 +682,13 @@ export async function insertMovimientos(
         setLocalMovimientos(merged);
         return data;
       }
-      console.warn('Error insertando en Supabase:', error?.message);
-    } catch (err) {
+      if (error) {
+        console.error('Error insertando en Supabase:', error.message);
+        throw new Error(`Error al guardar en Supabase: ${error.message}`);
+      }
+    } catch (err: any) {
       console.warn('Fallo red insert movimientos:', err);
+      throw err;
     }
   }
 
@@ -626,6 +700,12 @@ export async function insertMovimientos(
 }
 
 export async function updateMovimiento(mov: Movimiento): Promise<Movimiento> {
+  const tasa = Number(mov.tasa ?? mov.tasa_aplicada ?? 100);
+  const montoOrig = Number(mov.monto_original) || 0;
+  const monto_usd = mov.monto_usd ?? (mov.moneda_original === 'USD' ? montoOrig : (tasa > 0 ? montoOrig / tasa : 0));
+  const monto_bs = mov.monto_bs ?? (mov.moneda_original === 'USD' ? montoOrig * tasa : montoOrig);
+  const userId = mov.user_id || mov.creado_por || null;
+
   if (supabase) {
     try {
       const { data, error } = await supabase
@@ -639,8 +719,13 @@ export async function updateMovimiento(mov: Movimiento): Promise<Movimiento> {
           metodo_pago: mov.metodo_pago,
           moneda_original: mov.moneda_original,
           monto_original: mov.monto_original,
-          tasa_aplicada: mov.tasa_aplicada,
+          tasa_aplicada: tasa,
+          tasa: tasa,
+          monto_bs: Math.round(monto_bs * 100) / 100,
+          monto_usd: Math.round(monto_usd * 100) / 100,
           puesto_id: mov.puesto_id || null,
+          creado_por: userId,
+          user_id: userId,
         })
         .eq('id', mov.id)
         .select('*, puesto:puestos(*)')
@@ -651,9 +736,13 @@ export async function updateMovimiento(mov: Movimiento): Promise<Movimiento> {
         setLocalMovimientos(local);
         return data;
       }
-      console.warn('Error actualizando movimiento en Supabase:', error?.message);
-    } catch (err) {
+      if (error) {
+        console.error('Error actualizando movimiento en Supabase:', error.message);
+        throw new Error(`Error al actualizar en Supabase: ${error.message}`);
+      }
+    } catch (err: any) {
       console.warn('Fallo red update movimiento:', err);
+      throw err;
     }
   }
 
@@ -671,9 +760,13 @@ export async function deleteMovimiento(id: string): Promise<boolean> {
         setLocalMovimientos(local);
         return true;
       }
-      console.warn('Error eliminando en Supabase:', error?.message);
-    } catch (err) {
+      if (error) {
+        console.error('Error eliminando en Supabase:', error.message);
+        throw new Error(`Error al eliminar en Supabase: ${error.message}`);
+      }
+    } catch (err: any) {
       console.warn('Fallo red delete movimiento:', err);
+      throw err;
     }
   }
 
