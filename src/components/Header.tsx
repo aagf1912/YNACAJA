@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Pencil, LogOut, Store, Shield, Eye } from 'lucide-react';
+import { Pencil, LogOut, Store } from 'lucide-react';
 import { formatNumber } from '../utils/format';
 import { ModalTasa } from './ModalTasa';
-import { PerfilUsuario, RolUsuario } from '../types';
+import { PerfilUsuario } from '../types';
 
 interface Props {
   tasaDia: number;
@@ -10,7 +10,6 @@ interface Props {
   perfil?: PerfilUsuario | null;
   onCerrarSesion: () => void;
   onAbrirGestionPuestos?: () => void;
-  onCambiarRol?: (nuevoRol: RolUsuario) => Promise<void>;
 }
 
 export const Header: React.FC<Props> = ({
@@ -19,24 +18,9 @@ export const Header: React.FC<Props> = ({
   perfil,
   onCerrarSesion,
   onAbrirGestionPuestos,
-  onCambiarRol,
 }) => {
   const [modalAbierto, setModalAbierto] = useState(false);
   const esVendedor = perfil?.rol === 'vendedor';
-
-  const handleToggleAdmin = async () => {
-    if (!onCambiarRol) return;
-    if (window.confirm('¿Deseas activar el rol de Administrador (Ynaides)?')) {
-      await onCambiarRol('admin');
-    }
-  };
-
-  const handleToggleVendedor = async () => {
-    if (!onCambiarRol) return;
-    if (window.confirm('¿Deseas probar la vista de Vendedor?')) {
-      await onCambiarRol('vendedor');
-    }
-  };
 
   return (
     <>
@@ -55,38 +39,13 @@ export const Header: React.FC<Props> = ({
                   YnaCaja
                 </span>
                 {esVendedor ? (
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] font-bold bg-[#86EFAC]/20 text-[#86EFAC] border border-[#86EFAC]/30 px-1.5 py-0.5 rounded truncate">
-                      {perfil?.puesto?.nombre || 'Vendedor'}
-                    </span>
-                    {onCambiarRol && (
-                      <button
-                        type="button"
-                        onClick={handleToggleAdmin}
-                        className="flex items-center gap-0.5 text-[9px] font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 px-1.5 py-0.5 rounded transition-colors"
-                        title="Cambiar a Administrador"
-                      >
-                        <Shield size={10} className="text-amber-400" />
-                        <span>Admin</span>
-                      </button>
-                    )}
-                  </div>
+                  <span className="text-[10px] font-bold bg-[#86EFAC]/20 text-[#86EFAC] border border-[#86EFAC]/30 px-1.5 py-0.5 rounded truncate">
+                    {perfil?.puesto?.nombre || 'Vendedor'}
+                  </span>
                 ) : (
-                  <div className="flex items-center gap-1">
-                    <span className="text-[9px] font-bold bg-white/15 text-zinc-200 px-1 py-0.5 rounded uppercase tracking-wider">
-                      Admin
-                    </span>
-                    {onCambiarRol && (
-                      <button
-                        type="button"
-                        onClick={handleToggleVendedor}
-                        className="text-[9px] font-medium text-zinc-300 hover:text-white bg-white/10 hover:bg-white/15 px-1 py-0.5 rounded transition-colors"
-                        title="Probar vista de vendedor"
-                      >
-                        Vista Vend.
-                      </button>
-                    )}
-                  </div>
+                  <span className="text-[9px] font-bold bg-white/15 text-zinc-200 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                    Admin
+                  </span>
                 )}
               </div>
               <span className="text-[10px] text-[#86EFAC] font-medium tracking-wider uppercase leading-tight mt-0.5 truncate">
