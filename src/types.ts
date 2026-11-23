@@ -55,6 +55,7 @@ export interface Movimiento {
   categoria: CategoriaMovimiento;
   metodo_pago: MetodoPago;
   moneda_original: MonedaOriginal;
+  moneda?: string;
   monto_original: number;
   tasa_aplicada: number;
   tasa?: number;

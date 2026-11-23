@@ -90,8 +90,10 @@ export const RegistrarView: React.FC<Props> = ({
         categoria: m.categoria,
         metodo_pago: m.metodo_pago,
         moneda_original: m.moneda_original,
+        moneda: m.moneda_original,
         monto_original: m.monto_original,
         tasa_aplicada: tasaDia,
+        tasa: tasaDia,
         puesto_id: puestoSeleccionado || null,
       }));
 

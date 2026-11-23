@@ -125,8 +125,10 @@ export const ModalMovimiento: React.FC<Props> = ({
         categoria,
         metodo_pago: metodoPago,
         moneda_original: monedaOriginal,
+        moneda: monedaOriginal,
         monto_original: montoNum,
         tasa_aplicada: tasaNum,
+        tasa: tasaNum,
         puesto_id: puestoId || null,
       });
       onClose();

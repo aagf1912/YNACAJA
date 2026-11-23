@@ -122,6 +122,7 @@ export const BalanceView: React.FC<Props> = ({
         categoria: 'Sueldos / Comisiones',
         metodo_pago: 'efectivo_bs',
         moneda_original: 'USD',
+        moneda: 'USD',
         monto_original: montoComision,
         tasa_aplicada: tasa,
         tasa,
