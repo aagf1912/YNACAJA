@@ -18,6 +18,7 @@ import { getVenezuelaDate, parseTextoLocal } from '../utils/parserLocal';
 import { analizarTextoMovimientos } from '../services/api';
 import { ModalMovimiento } from '../components/ModalMovimiento';
 import { Clipboard as CapClipboard } from '@capacitor/clipboard';
+import { Shield } from 'lucide-react';
 
 interface Props {
   perfil: PerfilUsuario;
@@ -26,6 +27,7 @@ interface Props {
   onGuardarMovimientos: (movs: Omit<Movimiento, 'id' | 'created_at'>[]) => Promise<Movimiento[]>;
   onActualizarMovimiento: (mov: Movimiento) => Promise<void>;
   onEliminarMovimiento: (id: string) => Promise<void>;
+  onCambiarRol?: (nuevoRol: 'admin' | 'vendedor') => Promise<void>;
 }
 
 export const VendedorView: React.FC<Props> = ({
@@ -35,6 +37,7 @@ export const VendedorView: React.FC<Props> = ({
   onGuardarMovimientos,
   onActualizarMovimiento,
   onEliminarMovimiento,
+  onCambiarRol,
 }) => {
   const [texto, setTexto] = useState('');
   const [procesando, setProcesando] = useState(false);
@@ -204,6 +207,23 @@ export const VendedorView: React.FC<Props> = ({
 
   return (
     <div className="space-y-4 pb-20 pt-2 px-3 sm:px-4 max-w-2xl mx-auto">
+      {/* Banner para alternar a Administrador si es Ynaides */}
+      {onCambiarRol && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-2.5 flex items-center justify-between text-xs text-amber-900 shadow-xs">
+          <div className="flex items-center gap-2">
+            <Shield size={16} className="text-amber-600 shrink-0" />
+            <span>¿Eres <strong>Administrador (Ynaides)</strong>?</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onCambiarRol('admin')}
+            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-bold rounded text-xs transition-colors shrink-0 shadow-xs"
+          >
+            Activar Modo Admin
+          </button>
+        </div>
+      )}
+
       {/* 1. TARJETA DESTACADA: RESUMEN DE HOY Y COMISIÓN 22% */}
       <div className="bg-gradient-to-br from-[#2C474E] to-[#1a2d32] text-white rounded-xl p-4 sm:p-5 shadow-sm border border-[#23393e]">
         <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-3">

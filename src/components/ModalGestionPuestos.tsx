@@ -10,6 +10,22 @@ interface Props {
   onPuestosActualizados: (puestosActualizados: Puesto[]) => void;
 }
 
+/**
+ * Envoltorio para garantizar timeout de 10 segundos en cualquier petición asíncrona
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number = 10000,
+  mensajeError: string = 'Tiempo de espera agotado (10s) al conectar con Supabase. Revisa tu conexión a internet o los permisos.'
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(mensajeError)), ms)
+    ),
+  ]);
+}
+
 export const ModalGestionPuestos: React.FC<Props> = ({
   isOpen,
   puestos: puestosIniciales,
@@ -28,16 +44,21 @@ export const ModalGestionPuestos: React.FC<Props> = ({
   const [guardando, setGuardando] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Consultar directamente desde Supabase al abrir el modal y tras cada operación
+  // Consultar directamente desde Supabase con timeout de 10s y try/catch/finally garantizado
   const recargarPuestosDirecto = useCallback(async () => {
     setCargando(true);
     setErrorMsg(null);
     try {
-      const puestosFrescos = await getPuestos();
+      const puestosFrescos = await withTimeout(
+        getPuestos(),
+        10000,
+        'Tiempo de espera agotado (10s) al sincronizar puestos con Supabase.'
+      );
       setListaPuestos(puestosFrescos);
       onPuestosActualizados(puestosFrescos);
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Error al consultar los puestos desde Supabase.');
+      console.error('Error al consultar puestos:', err);
+      setErrorMsg(err?.message || 'Error de conexión o permisos al consultar puestos en Supabase.');
     } finally {
       setCargando(false);
     }
@@ -49,6 +70,8 @@ export const ModalGestionPuestos: React.FC<Props> = ({
     } else {
       setEditandoId(null);
       setErrorMsg(null);
+      setCargando(false);
+      setGuardando(false);
     }
   }, [isOpen, recargarPuestosDirecto]);
 
@@ -70,18 +93,21 @@ export const ModalGestionPuestos: React.FC<Props> = ({
     setGuardando(true);
     setErrorMsg(null);
     try {
-      await crearPuesto({
-        nombre: nuevoNombre.trim(),
-        porcentaje_comision: comisionNum,
-        activo: true,
-      });
+      await withTimeout(
+        crearPuesto({
+          nombre: nuevoNombre.trim(),
+          porcentaje_comision: comisionNum,
+          activo: true,
+        }),
+        10000,
+        'Tiempo de espera agotado (10s) al guardar el nuevo puesto en Supabase.'
+      );
 
-      // Refrescar lista directamente desde Supabase
       await recargarPuestosDirecto();
-
       setNuevoNombre('');
       setNuevaComision('22.00');
     } catch (err: any) {
+      console.error('Error al crear puesto:', err);
       setErrorMsg(err?.message || 'Error al crear el puesto en Supabase.');
     } finally {
       setGuardando(false);
@@ -112,17 +138,21 @@ export const ModalGestionPuestos: React.FC<Props> = ({
     setGuardando(true);
     setErrorMsg(null);
     try {
-      await actualizarPuesto({
-        ...puestoOriginal,
-        nombre: editNombre.trim(),
-        porcentaje_comision: comisionNum,
-        activo: editActivo,
-      });
+      await withTimeout(
+        actualizarPuesto({
+          ...puestoOriginal,
+          nombre: editNombre.trim(),
+          porcentaje_comision: comisionNum,
+          activo: editActivo,
+        }),
+        10000,
+        'Tiempo de espera agotado (10s) al actualizar el puesto en Supabase.'
+      );
 
-      // Refrescar lista directamente desde Supabase
       await recargarPuestosDirecto();
       setEditandoId(null);
     } catch (err: any) {
+      console.error('Error al actualizar puesto:', err);
       setErrorMsg(err?.message || 'Error al actualizar el puesto en Supabase.');
     } finally {
       setGuardando(false);
@@ -139,11 +169,15 @@ export const ModalGestionPuestos: React.FC<Props> = ({
     setGuardando(true);
     setErrorMsg(null);
     try {
-      await eliminarPuesto(p.id);
+      await withTimeout(
+        eliminarPuesto(p.id),
+        10000,
+        'Tiempo de espera agotado (10s) al eliminar el puesto en Supabase.'
+      );
 
-      // Refrescar lista directamente desde Supabase
       await recargarPuestosDirecto();
     } catch (err: any) {
+      console.error('Error al eliminar puesto:', err);
       setErrorMsg(err?.message || 'Error al eliminar el puesto en Supabase.');
     } finally {
       setGuardando(false);
@@ -172,13 +206,21 @@ export const ModalGestionPuestos: React.FC<Props> = ({
 
         {/* Contenido scrolleable */}
         <div className="p-4 overflow-y-auto space-y-4 text-xs">
-          {/* CARTEL ROJO VISIBLE ANTE CUALQUIER ERROR DE SUPABASE */}
+          {/* CARTEL ROJO VISIBLE ANTE CUALQUIER ERROR DE RED O SUPABASE */}
           {errorMsg && (
-            <div className="p-3 bg-[#FEF2F2] border-2 border-[#FECACA] rounded-lg text-xs text-[#991B1B] flex items-start gap-2 shadow-xs">
+            <div className="p-3 bg-[#FEF2F2] border-2 border-[#FECACA] rounded-lg text-xs text-[#991B1B] flex items-start gap-2 shadow-xs animate-in fade-in">
               <AlertCircle size={18} className="shrink-0 mt-0.5 text-red-600" />
               <div className="flex-1">
-                <span className="font-bold block mb-0.5">Error de Supabase:</span>
-                <span className="font-mono break-words leading-relaxed">{errorMsg}</span>
+                <span className="font-bold block mb-0.5">Error de Supabase / Red:</span>
+                <span className="font-mono break-words leading-relaxed text-[11px] block">{errorMsg}</span>
+                <button
+                  type="button"
+                  onClick={recargarPuestosDirecto}
+                  className="mt-2 px-2.5 py-1 bg-red-800 text-white font-bold rounded hover:bg-red-900 transition-colors inline-flex items-center gap-1 text-[11px]"
+                >
+                  <Loader2 size={11} className={cargando ? 'animate-spin' : ''} />
+                  <span>Reintentar sincronización</span>
+                </button>
               </div>
             </div>
           )}

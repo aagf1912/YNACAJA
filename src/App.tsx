@@ -7,7 +7,7 @@ import { BalanceView } from './views/BalanceView';
 import { VendedorView } from './views/VendedorView';
 import { LoginView } from './views/LoginView';
 import { ModalGestionPuestos } from './components/ModalGestionPuestos';
-import { Movimiento, PerfilUsuario, Puesto } from './types';
+import { Movimiento, PerfilUsuario, Puesto, RolUsuario } from './types';
 import {
   getConfigNegocio,
   getMovimientos,
@@ -17,6 +17,7 @@ import {
   updateTasaDia,
   getPuestos,
   getPerfilUsuario,
+  actualizarRolUsuario,
   signOutUsuario,
   supabase,
 } from './services/supabase';
@@ -154,6 +155,36 @@ export const App: React.FC = () => {
     }
   };
 
+  // Alternar entre rol Admin y Vendedor
+  const handleCambiarRol = async (nuevoRol: RolUsuario, puestoId?: string | null) => {
+    if (!perfil) return;
+    setCargandoDatos(true);
+    try {
+      const updatedPerfil = await actualizarRolUsuario(perfil.id, nuevoRol, puestoId);
+      setPerfil(updatedPerfil);
+      const [pts, movs] = await Promise.all([
+        getPuestos(),
+        getMovimientos(updatedPerfil.rol, updatedPerfil.puesto_id),
+      ]);
+      setPuestos(pts);
+      setMovimientos(movs);
+    } catch (err: any) {
+      console.warn('Error cambiando rol en Supabase, aplicando localmente:', err);
+      setPerfil((prev) =>
+        prev
+          ? {
+              ...prev,
+              rol: nuevoRol,
+              nombre: nuevoRol === 'admin' ? 'Administrador (Ynaides)' : 'Vendedor',
+              puesto_id: nuevoRol === 'admin' ? null : (puestoId ?? null),
+            }
+          : null
+      );
+    } finally {
+      setCargandoDatos(false);
+    }
+  };
+
   // Pantalla de carga mientras se verifica auth
   if (cargandoAuth) {
     return (
@@ -180,6 +211,7 @@ export const App: React.FC = () => {
         perfil={perfil}
         onCerrarSesion={handleCerrarSesion}
         onAbrirGestionPuestos={() => setModalPuestosAbierto(true)}
+        onCambiarRol={handleCambiarRol}
       />
 
       {/* Contenido Principal */}
@@ -198,6 +230,7 @@ export const App: React.FC = () => {
             onGuardarMovimientos={handleGuardarMovimientos}
             onActualizarMovimiento={handleActualizarMovimiento}
             onEliminarMovimiento={handleEliminarMovimiento}
+            onCambiarRol={handleCambiarRol}
           />
         ) : (
           /* VISTA DEL ADMINISTRADOR (YNAIDES: Pestañas Registrar, Movimientos, Balance) */

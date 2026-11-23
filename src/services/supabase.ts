@@ -104,6 +104,76 @@ export async function getPerfilUsuario(userId: string): Promise<PerfilUsuario> {
   };
 }
 
+export async function actualizarRolUsuario(
+  userId: string,
+  nuevoRol: RolUsuario,
+  puestoId: string | null = null
+): Promise<PerfilUsuario> {
+  if (supabase) {
+    try {
+      // 1. Intentar primero con UPDATE por si el usuario no tiene permisos de INSERT
+      const { data: updateData, error: updateError } = await supabase
+        .from('perfiles')
+        .update({
+          nombre: nuevoRol === 'admin' ? 'Administrador (Ynaides)' : 'Vendedor',
+          rol: nuevoRol,
+          puesto_id: nuevoRol === 'admin' ? null : puestoId,
+        })
+        .eq('id', userId)
+        .select('*, puesto:puestos(*)')
+        .maybeSingle();
+
+      if (!updateError && updateData) {
+        return {
+          id: updateData.id,
+          nombre: updateData.nombre || (nuevoRol === 'admin' ? 'Administrador (Ynaides)' : 'Vendedor'),
+          rol: updateData.rol as RolUsuario,
+          puesto_id: updateData.puesto_id || null,
+          puesto: updateData.puesto || null,
+          created_at: updateData.created_at,
+        };
+      }
+
+      // 2. Si no había fila previa, intentar upsert
+      const { data, error } = await supabase
+        .from('perfiles')
+        .upsert({
+          id: userId,
+          nombre: nuevoRol === 'admin' ? 'Administrador (Ynaides)' : 'Vendedor',
+          rol: nuevoRol,
+          puesto_id: nuevoRol === 'admin' ? null : puestoId,
+        })
+        .select('*, puesto:puestos(*)')
+        .single();
+
+      if (!error && data) {
+        return {
+          id: data.id,
+          nombre: data.nombre || (nuevoRol === 'admin' ? 'Administrador (Ynaides)' : 'Vendedor'),
+          rol: data.rol as RolUsuario,
+          puesto_id: data.puesto_id || null,
+          puesto: data.puesto || null,
+          created_at: data.created_at,
+        };
+      }
+
+      if (error || updateError) {
+        console.warn('Aviso actualizando rol en Supabase:', error || updateError);
+      }
+    } catch (err: any) {
+      console.warn('Excepción al actualizar rol en Supabase:', err);
+    }
+  }
+
+  return {
+    id: userId,
+    nombre: nuevoRol === 'admin' ? 'Administrador (Ynaides)' : 'Vendedor',
+    rol: nuevoRol,
+    puesto_id: nuevoRol === 'admin' ? null : puestoId,
+    puesto: null,
+  };
+}
+
 export async function signOutUsuario(): Promise<void> {
   if (supabase) {
     try {
