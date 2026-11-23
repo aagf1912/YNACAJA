@@ -46,6 +46,7 @@ interface Props {
   puestos?: Puesto[];
   tasaActual?: number;
   onGuardarMovimientos?: (movs: Omit<Movimiento, 'id' | 'created_at'>[]) => Promise<Movimiento[]>;
+  onRecargarDatos?: () => Promise<void>;
 }
 
 export const BalanceView: React.FC<Props> = ({
@@ -53,6 +54,7 @@ export const BalanceView: React.FC<Props> = ({
   puestos = [],
   tasaActual = 100,
   onGuardarMovimientos,
+  onRecargarDatos,
 }) => {
   const reportRef = useRef<HTMLDivElement>(null);
   const [compartiendo, setCompartiendo] = useState(false);
@@ -63,9 +65,24 @@ export const BalanceView: React.FC<Props> = ({
   const [liquidaciones, setLiquidaciones] = useState<LiquidacionSemanal[]>([]);
   const [liquidandoPuestoId, setLiquidandoPuestoId] = useState<string | null>(null);
 
-  // Cargar liquidaciones semanales
+  // Cargar liquidaciones semanales via fetch directo
   const cargarLiquidaciones = useCallback(async () => {
     try {
+      const token = getAccessTokenFromStorage() || supabaseAnonKey;
+      const res = await fetch(`${supabaseUrl}/rest/v1/liquidaciones_semanales?select=*`, {
+        method: 'GET',
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setLiquidaciones(data);
+          return;
+        }
+      }
       const data = await getLiquidacionesSemanales();
       setLiquidaciones(data);
     } catch (err) {
@@ -91,14 +108,14 @@ export const BalanceView: React.FC<Props> = ({
     );
   }, [movimientos, infoSemana.semanaInicio, infoSemana.semanaFin]);
 
-  // Comprobar si un puesto ya fue liquidado en esta semana
+  // Comprobar si un puesto ya fue liquidado en esta semana (anti-doble pago)
   const isPuestoLiquidado = useCallback(
     (puestoId: string) => {
       return liquidaciones.some(
         (l) =>
           l.puesto_id === puestoId &&
           l.semana_inicio === infoSemana.semanaInicio &&
-          l.pagado !== false
+          (l.pagado !== false || (l as any).monto_pagado_bs > 0)
       );
     },
     [liquidaciones, infoSemana.semanaInicio]
@@ -136,7 +153,7 @@ export const BalanceView: React.FC<Props> = ({
     });
   };
 
-  // Confirmar y registrar pago de comisión con fetch directo a movimientos y liquidaciones_semanales
+  // Confirmar y registrar pago de comisión llamando via fetch POST a rpc/liquidar_comision_semanal
   const handleConfirmarPago = async () => {
     if (!pagoModalData || liquidandoPuestoId) return;
 
@@ -146,132 +163,54 @@ export const BalanceView: React.FC<Props> = ({
       return;
     }
 
-    const { puestoId, puestoNombre, totalVentasUSD, comisionPorcentaje, comisionUSD } = pagoModalData;
-    const montoBs = Math.round(comisionUSD * tasaNum * 100) / 100;
-    const fechaHoy = getVenezuelaDate();
+    const { puestoId, totalVentasUSD, comisionPorcentaje, comisionUSD } = pagoModalData;
+    const fechaHoyVzla = getVenezuelaDate();
     const token = getAccessTokenFromStorage() || supabaseAnonKey;
 
     setLiquidandoPuestoId(puestoId);
     try {
-      const movId = crypto.randomUUID ? crypto.randomUUID() : `mov_${Date.now()}`;
-      const payloadMov = {
-        id: movId,
-        fecha: fechaHoy,
-        descripcion: `Pago Comisión Semana ${rangoTexto} - ${puestoNombre}`,
-        tipo: 'gasto' as const,
-        naturaleza: 'Negocio' as const, // En la UI se muestra como Gastos
-        categoria: 'Sueldos / Comisiones' as const,
-        metodo_pago: metodoPagoComision,
-        moneda: 'VES',
-        moneda_original: 'VES' as const,
-        monto_original: montoBs,
-        monto_bs: montoBs,
-        monto_usd: comisionUSD,
-        tasa: tasaNum,
-        tasa_aplicada: tasaNum,
-        puesto_id: puestoId,
-      };
+      const res = await fetch(`${supabaseUrl}/rest/v1/rpc/liquidar_comision_semanal`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          p_puesto_id: puestoId,
+          p_semana_inicio: infoSemana.semanaInicio,
+          p_semana_fin: infoSemana.semanaFin,
+          p_total_ventas_usd: totalVentasUSD,
+          p_comision_porcentaje: comisionPorcentaje,
+          p_monto_comision_usd: comisionUSD,
+          p_tasa_pago: tasaNum,
+          p_metodo_pago: metodoPagoComision,
+          p_fecha_pago: fechaHoyVzla,
+        }),
+      });
 
-      // 1. Insertar movimiento en public.movimientos via fetch directo
-      let movimientoGastoId = movId;
-      try {
-        const resMov = await fetch(`${supabaseUrl}/rest/v1/movimientos`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: supabaseAnonKey,
-            Authorization: `Bearer ${token}`,
-            Prefer: 'return=representation',
-          },
-          body: JSON.stringify([payloadMov]),
-        });
-
-        if (resMov.ok) {
-          const dataMov = await resMov.json();
-          if (Array.isArray(dataMov) && dataMov[0]?.id) {
-            movimientoGastoId = dataMov[0].id;
-          }
-        } else {
-          if (onGuardarMovimientos) {
-            const guardados = await onGuardarMovimientos([payloadMov]);
-            if (guardados && guardados[0]) movimientoGastoId = guardados[0].id;
-          } else {
-            const guardados = await insertMovimientos([payloadMov]);
-            if (guardados && guardados[0]) movimientoGastoId = guardados[0].id;
-          }
+      if (!res.ok) {
+        let errMsg = 'Error al liquidar comisión';
+        try {
+          const errData = await res.json();
+          errMsg = errData?.message || errData?.error_description || errMsg;
+        } catch {
+          const text = await res.text();
+          if (text) errMsg = text;
         }
-      } catch (errMov) {
-        console.warn('Fallo fetch insert movimiento, aplicando fallback:', errMov);
-        if (onGuardarMovimientos) {
-          const guardados = await onGuardarMovimientos([payloadMov]);
-          if (guardados && guardados[0]) movimientoGastoId = guardados[0].id;
-        } else {
-          const guardados = await insertMovimientos([payloadMov]);
-          if (guardados && guardados[0]) movimientoGastoId = guardados[0].id;
-        }
+        throw new Error(errMsg);
       }
 
-      // 2. Guardar liquidación en public.liquidaciones_semanales via fetch directo
-      const payloadLiq: Record<string, any> = {
-        puesto_id: puestoId,
-        semana_inicio: infoSemana.semanaInicio,
-        semana_fin: infoSemana.semanaFin,
-        total_ventas_usd: totalVentasUSD,
-        comision_porcentaje: comisionPorcentaje,
-        monto_comision_usd: comisionUSD,
-        monto_usd: comisionUSD,
-        monto_bs: montoBs,
-        tasa: tasaNum,
-        movimiento_gasto_id: movimientoGastoId,
-        movimiento_id: movimientoGastoId,
-        pagado: true,
-        fecha_pago: fechaHoy,
-      };
-
-      try {
-        const resLiq = await fetch(`${supabaseUrl}/rest/v1/liquidaciones_semanales`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: supabaseAnonKey,
-            Authorization: `Bearer ${token}`,
-            Prefer: 'resolution=merge-duplicates,return=representation',
-          },
-          body: JSON.stringify([payloadLiq]),
-        });
-
-        if (!resLiq.ok) {
-          await registrarLiquidacionSemanal({
-            puesto_id: puestoId,
-            semana_inicio: infoSemana.semanaInicio,
-            semana_fin: infoSemana.semanaFin,
-            monto_usd: comisionUSD,
-            monto_bs: montoBs,
-            tasa: tasaNum,
-            movimiento_id: movimientoGastoId,
-            pagado: true,
-            fecha_pago: fechaHoy,
-          });
-        }
-      } catch (errLiq) {
-        console.warn('Fallo fetch liquidaciones_semanales, aplicando fallback:', errLiq);
-        await registrarLiquidacionSemanal({
-          puesto_id: puestoId,
-          semana_inicio: infoSemana.semanaInicio,
-          semana_fin: infoSemana.semanaFin,
-          monto_usd: comisionUSD,
-          monto_bs: montoBs,
-          tasa: tasaNum,
-          movimiento_id: movimientoGastoId,
-          pagado: true,
-          fecha_pago: fechaHoy,
-        });
-      }
-
+      // Cerrar modal
       setPagoModalData(null);
+
+      // Recargar liquidaciones_semanales y movimientos para actualizar inmediatamente la interfaz
       await cargarLiquidaciones();
+      if (onRecargarDatos) {
+        await onRecargarDatos();
+      }
     } catch (err: any) {
-      console.error('Error al pagar comisión:', err);
+      console.error('Error al registrar pago de comisión:', err);
       alert(err?.message || 'Error al procesar el pago de comisión.');
     } finally {
       setLiquidandoPuestoId(null);

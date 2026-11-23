@@ -20,6 +20,7 @@ import {
   signOutUsuario,
   supabase,
 } from './services/supabase';
+import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from './lib/supabase';
 import { getVenezuelaDate } from './utils/parserLocal';
 import { obtenerTasaBCVOficial } from './lib/bcv';
 import { Loader2, CheckCircle2 } from 'lucide-react';
@@ -93,48 +94,93 @@ export const App: React.FC = () => {
     }
   }, [verificarSesion]);
 
+  // Sincronización automática de tasa BCV oficial
+  const sincronizarTasaBCVApp = useCallback(async (): Promise<number> => {
+    const token = getAccessTokenFromStorage() || supabaseAnonKey;
+    const fechaHoyVzla = getVenezuelaDate();
+    let tasaFinal = 0;
+    let requiereSincronizacion = false;
+
+    try {
+      const res = await fetch(`${supabaseUrl}/rest/v1/tasa_bcv_oficial?id=eq.1`, {
+        method: 'GET',
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const fila = data[0];
+          const t = Number(fila.tasa);
+          if (t > 0 && fila.fecha === fechaHoyVzla) {
+            tasaFinal = t;
+          } else {
+            requiereSincronizacion = true;
+            if (t > 0) tasaFinal = t;
+          }
+        } else {
+          requiereSincronizacion = true;
+        }
+      } else {
+        requiereSincronizacion = true;
+      }
+    } catch (err) {
+      console.warn('Error consultando tasa_bcv_oficial:', err);
+      requiereSincronizacion = true;
+    }
+
+    if (requiereSincronizacion) {
+      try {
+        const tasaApi = await obtenerTasaBCVOficial();
+        if (tasaApi > 0) {
+          await fetch(`${supabaseUrl}/rest/v1/rpc/sincronizar_tasa_bcv`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: supabaseAnonKey,
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              p_tasa: tasaApi,
+              p_fecha: fechaHoyVzla,
+            }),
+          });
+          tasaFinal = tasaApi;
+          updateTasaDia(tasaApi).catch(() => {});
+          console.log(`✓ Tasa BCV sincronizada automáticamente a hoy (${fechaHoyVzla}): ${tasaApi} Bs/$`);
+        }
+      } catch (errApi) {
+        console.warn('Error sincronizando tasa BCV automática con API:', errApi);
+      }
+    }
+
+    if (tasaFinal > 0) {
+      setTasaDia(tasaFinal);
+    }
+    return tasaFinal;
+  }, []);
+
+  // Al abrir la app, sincronizar inmediatamente la tasa BCV oficial
+  useEffect(() => {
+    sincronizarTasaBCVApp();
+  }, [sincronizarTasaBCVApp]);
+
   // 2. Carga de datos contables y puestos una vez autenticado
   const cargarDatos = useCallback(async () => {
     if (!perfil) return;
     setCargandoDatos(true);
     try {
-      const [cfg, pts, movs] = await Promise.all([
+      const [tasaBcv, cfg, pts, movs] = await Promise.all([
+        sincronizarTasaBCVApp(),
         getConfigNegocio(),
         getPuestos(),
         getMovimientos(perfil.rol, perfil.puesto_id),
       ]);
 
-      let tasaFinal = cfg?.tasa_dia ? Number(cfg.tasa_dia) : 100.0;
-
-      // Sincronización automática con BCV si la fecha guardada es anterior a hoy (UTC-4)
-      const fechaHoyVzla = getVenezuelaDate();
-      let fechaCfgVzla = '';
-      if (cfg?.updated_at) {
-        try {
-          const d = new Date(cfg.updated_at);
-          const formatter = new Intl.DateTimeFormat('en-CA', {
-            timeZone: 'America/Caracas',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-          });
-          fechaCfgVzla = formatter.format(d);
-        } catch {}
-      }
-
-      if (!fechaCfgVzla || fechaCfgVzla < fechaHoyVzla) {
-        try {
-          const tasaBcv = await obtenerTasaBCVOficial();
-          if (tasaBcv > 0 && tasaBcv !== tasaFinal) {
-            const updated = await updateTasaDia(tasaBcv);
-            tasaFinal = Number(updated.tasa_dia);
-            console.log(`✓ Tasa BCV sincronizada automáticamente a hoy (${fechaHoyVzla}): ${tasaBcv} Bs/$`);
-          }
-        } catch (e) {
-          console.warn('Aviso sincronizando tasa BCV automática al inicio:', e);
-        }
-      }
-
+      const tasaFinal = tasaBcv > 0 ? tasaBcv : (cfg?.tasa_dia ? Number(cfg.tasa_dia) : 100.0);
       setTasaDia(tasaFinal);
       setPuestos(pts);
       setMovimientos(movs);
@@ -143,7 +189,7 @@ export const App: React.FC = () => {
     } finally {
       setCargandoDatos(false);
     }
-  }, [perfil]);
+  }, [perfil, sincronizarTasaBCVApp]);
 
   useEffect(() => {
     if (perfil) {
@@ -172,10 +218,62 @@ export const App: React.FC = () => {
     };
   }, [perfil, cargarDatos]);
 
-  // Manejo de actualización de tasa
+  // Suscripción en tiempo real a la tasa oficial BCV
+  useEffect(() => {
+    const client = supabase;
+    if (!client) return;
+
+    const channel = client
+      .channel('realtime-tasa-bcv-global')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tasa_bcv_oficial' },
+        (payload) => {
+          if (payload.new && (payload.new as any).tasa) {
+            const t = Number((payload.new as any).tasa);
+            if (t > 0) setTasaDia(t);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client.removeChannel(channel);
+    };
+  }, []);
+
+  // Manejo de actualización manual de tasa con lápiz
   const handleActualizarTasa = async (nuevaTasa: number) => {
-    const updated = await updateTasaDia(nuevaTasa);
-    setTasaDia(Number(updated.tasa_dia));
+    if (nuevaTasa <= 0) return;
+    const token = getAccessTokenFromStorage() || supabaseAnonKey;
+    const fechaHoyVzla = getVenezuelaDate();
+
+    try {
+      await fetch(`${supabaseUrl}/rest/v1/rpc/sincronizar_tasa_bcv`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          p_tasa: nuevaTasa,
+          p_fecha: fechaHoyVzla,
+        }),
+      });
+    } catch (e) {
+      console.warn('Error sincronizando tasa manual via RPC:', e);
+    }
+
+    try {
+      const updated = await updateTasaDia(nuevaTasa);
+      if (updated?.tasa_dia) {
+        setTasaDia(Number(updated.tasa_dia));
+        return;
+      }
+    } catch (e) {}
+
+    setTasaDia(nuevaTasa);
   };
 
   // Sincronización manual bajo demanda desde el botón "↻ BCV"
@@ -328,6 +426,7 @@ export const App: React.FC = () => {
                 puestos={puestos}
                 tasaActual={tasaDia}
                 onGuardarMovimientos={handleGuardarMovimientos}
+                onRecargarDatos={cargarDatos}
               />
             )}
           </>

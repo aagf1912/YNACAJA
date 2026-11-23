@@ -4,7 +4,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
-  DollarSign,
   TrendingUp,
   TrendingDown,
   CheckCircle2,
@@ -12,8 +11,6 @@ import {
   Loader2,
   Lock,
   Award,
-  ChevronDown,
-  ChevronUp,
   Banknote,
   Smartphone,
   CreditCard,
@@ -26,28 +23,7 @@ import { formatNumber, formatUSD, formatVES } from '../utils/format';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { getSemanaLunesSabado, shiftSemana } from '../utils/dateUtils';
 import { getLiquidacionesSemanales, supabase } from '../services/supabase';
-import { supabaseUrl, supabaseAnonKey } from '../lib/supabase';
-
-// Lee directamente el token de sesión de Supabase de localStorage sin usar getSession (evita locks)
-function getAccessTokenFromStorage(): string {
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
-        const raw = localStorage.getItem(key);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed && parsed.access_token) {
-            return parsed.access_token;
-          }
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('Error leyendo auth token de localStorage:', e);
-  }
-  return '';
-}
+import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
 
 interface Props {
   perfil: PerfilUsuario;
@@ -70,16 +46,74 @@ export const VendedorView: React.FC<Props> = ({
   // Fecha fija estricta de HOY en Venezuela (UTC-4)
   const fechaHoyVzla = useMemo(() => getVenezuelaDate(), []);
 
-  // Campos del formulario de Cierre de Caja Diario (EXCLUSIVAMENTE DE HOY)
+  // Tasa oficial sincronizada con Supabase (tasa_bcv_oficial)
+  const [tasaEfectiva, setTasaEfectiva] = useState<number>(tasaDia > 0 ? tasaDia : 0);
+
+  // Consultar tasa_bcv_oficial?id=eq.1 al montar la vista
+  useEffect(() => {
+    let cancelado = false;
+    const cargarTasaOficial = async () => {
+      try {
+        const token = getAccessTokenFromStorage() || supabaseAnonKey;
+        const res = await fetch(`${supabaseUrl}/rest/v1/tasa_bcv_oficial?id=eq.1`, {
+          method: 'GET',
+          headers: {
+            apikey: supabaseAnonKey,
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelado && Array.isArray(data) && data[0]?.tasa) {
+            const t = Number(data[0].tasa);
+            if (t > 0) setTasaEfectiva(t);
+          }
+        }
+      } catch (err) {
+        console.warn('Error consultando tasa_bcv_oficial en VendedorView:', err);
+      }
+    };
+    cargarTasaOficial();
+    return () => {
+      cancelado = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (tasaDia > 0) {
+      setTasaEfectiva(tasaDia);
+    }
+  }, [tasaDia]);
+
+  // Suscripción Realtime a tasa_bcv_oficial para actualizar al instante
+  useEffect(() => {
+    const client = supabase;
+    if (!client) return;
+
+    const channel = client
+      .channel('rt-vendedor-tasa-bcv')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tasa_bcv_oficial' },
+        (payload) => {
+          if (payload.new && (payload.new as any).tasa) {
+            const t = Number((payload.new as any).tasa);
+            if (t > 0) setTasaEfectiva(t);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client.removeChannel(channel);
+    };
+  }, []);
+
+  // Campos del formulario de Cierre de Caja Diario (EXCLUSIVAMENTE DE HOY - Solo 4 métodos de venta)
   const [montoEfectivoBs, setMontoEfectivoBs] = useState<string>('');
   const [montoPagoMovilBs, setMontoPagoMovilBs] = useState<string>('');
   const [montoPuntoVentaBs, setMontoPuntoVentaBs] = useState<string>('');
   const [montoDivisasUSD, setMontoDivisasUSD] = useState<string>('');
-
-  // Sección opcional de gastos del puesto en efectivo
-  const [mostrarGastos, setMostrarGastos] = useState<boolean>(false);
-  const [gastoBs, setGastoBs] = useState<string>('');
-  const [gastoDescripcion, setGastoDescripcion] = useState<string>('');
 
   // Estados de guardado, mensaje y toast
   const [guardando, setGuardando] = useState<boolean>(false);
@@ -94,13 +128,32 @@ export const VendedorView: React.FC<Props> = ({
   // Comisión del puesto (default 22%)
   const comisionPorcentaje = perfil.puesto?.porcentaje_comision ?? 22.0;
 
-  // Cargar liquidaciones semanales
+  // Cargar liquidaciones semanales via fetch directo
   const cargarLiquidaciones = useCallback(async () => {
+    if (!perfil.puesto_id) return;
     try {
-      const data = await getLiquidacionesSemanales(perfil.puesto_id || undefined);
+      const token = getAccessTokenFromStorage() || supabaseAnonKey;
+      const res = await fetch(
+        `${supabaseUrl}/rest/v1/liquidaciones_semanales?puesto_id=eq.${perfil.puesto_id}&select=*`,
+        {
+          method: 'GET',
+          headers: {
+            apikey: supabaseAnonKey,
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setLiquidaciones(data);
+          return;
+        }
+      }
+      const data = await getLiquidacionesSemanales(perfil.puesto_id);
       setLiquidaciones(data);
     } catch (err) {
-      console.warn('Error cargando liquidaciones:', err);
+      console.warn('Error cargando liquidaciones en VendedorView:', err);
     }
   }, [perfil.puesto_id]);
 
@@ -184,8 +237,6 @@ export const VendedorView: React.FC<Props> = ({
     let pmBs = 0;
     let ptBs = 0;
     let divUSD = 0;
-    let gastBs = 0;
-    let descGasto = '';
 
     for (const m of movsHoy) {
       const tipo = (m.tipo || '').toLowerCase();
@@ -204,18 +255,10 @@ export const VendedorView: React.FC<Props> = ({
         } else if (metodo === 'divisa' || metodo.includes('divisa') || metodo.includes('dolar') || metodo.includes('usd')) {
           divUSD += mUSD || orig;
         }
-      } else if (tipo === 'gasto' || tipo === 'egreso') {
-        if (m.categoria !== 'Sueldos / Comisiones') {
-          const tasa = Number(m.tasa ?? m.tasa_aplicada ?? tasaDia) || 100;
-          gastBs += (m.moneda_original === 'USD' || m.moneda === 'USD') ? orig * tasa : (mBs || orig);
-          if (m.descripcion && !descGasto) {
-            descGasto = m.descripcion.replace(/\s*-\s*.*$/, '').trim();
-          }
-        }
       }
     }
 
-    const hayDatos = efBs > 0 || pmBs > 0 || ptBs > 0 || divUSD > 0 || gastBs > 0;
+    const hayDatos = efBs > 0 || pmBs > 0 || ptBs > 0 || divUSD > 0;
     setTieneCierreGuardadoHoy(hayDatos);
 
     if (hayDatos) {
@@ -223,14 +266,8 @@ export const VendedorView: React.FC<Props> = ({
       setMontoPagoMovilBs(pmBs > 0 ? String(pmBs) : '');
       setMontoPuntoVentaBs(ptBs > 0 ? String(ptBs) : '');
       setMontoDivisasUSD(divUSD > 0 ? String(divUSD) : '');
-
-      if (gastBs > 0) {
-        setMostrarGastos(true);
-        setGastoBs(String(gastBs));
-        setGastoDescripcion(descGasto);
-      }
     }
-  }, [movimientos, perfil.puesto_id, fechaHoyVzla, tasaDia]);
+  }, [movimientos, perfil.puesto_id, fechaHoyVzla]);
 
   // Al montar, cuando se cambie de pestaña o se actualicen los movimientos, sincronizar cierre de hoy
   useEffect(() => {
@@ -239,35 +276,29 @@ export const VendedorView: React.FC<Props> = ({
     }
   }, [tabActiva, cargarCierreDeHoy]);
 
-  // Resumen en vivo de los montos que el vendedor escribe para hoy
+  // Resumen en vivo de los montos que el vendedor escribe para hoy (solo ventas, sin deducciones de gastos)
   const resumenCierreHoy = useMemo(() => {
     const efBs = parseFloat(montoEfectivoBs) || 0;
     const pmBs = parseFloat(montoPagoMovilBs) || 0;
     const ptBs = parseFloat(montoPuntoVentaBs) || 0;
     const divUSD = parseFloat(montoDivisasUSD) || 0;
-    const gBs = parseFloat(gastoBs) || 0;
 
-    const tasa = tasaDia > 0 ? tasaDia : 100;
+    const tasa = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
     const totalBsVentas = efBs + pmBs + ptBs;
     const totalVendidoUSD = totalBsVentas / tasa + divUSD;
     const comisionUSD = (totalVendidoUSD * comisionPorcentaje) / 100;
-
-    // Dinero físico a entregar
-    const efectivoBsNeto = Math.max(0, efBs - gBs);
-    const divisasUSDNeto = divUSD;
 
     return {
       efBs,
       pmBs,
       ptBs,
       divUSD,
-      gBs,
       totalVendidoUSD,
       comisionUSD,
-      efectivoBsNeto,
-      divisasUSDNeto,
+      efectivoBsFisico: efBs,
+      divisasUSDFisico: divUSD,
     };
-  }, [montoEfectivoBs, montoPagoMovilBs, montoPuntoVentaBs, montoDivisasUSD, gastoBs, tasaDia, comisionPorcentaje]);
+  }, [montoEfectivoBs, montoPagoMovilBs, montoPuntoVentaBs, montoDivisasUSD, tasaEfectiva, tasaDia, comisionPorcentaje]);
 
   // Guardar Cierre del Día (Exclusivamente de HOY) con try/catch/finally garantizado y timeout
   const handleGuardarCierre = async () => {
@@ -287,11 +318,10 @@ export const VendedorView: React.FC<Props> = ({
     const pmBs = parseFloat(montoPagoMovilBs) || 0;
     const ptBs = parseFloat(montoPuntoVentaBs) || 0;
     const divUSD = parseFloat(montoDivisasUSD) || 0;
-    const gBs = parseFloat(gastoBs) || 0;
 
     const totalVendido = efBs + pmBs + ptBs + divUSD;
-    if (totalVendido <= 0 && gBs <= 0) {
-      setMensajeError('Ingresa al menos un monto de venta o gasto para guardar el cierre del día.');
+    if (totalVendido <= 0) {
+      setMensajeError('Ingresa al menos un monto de venta para guardar el cierre del día.');
       return;
     }
 
@@ -303,7 +333,7 @@ export const VendedorView: React.FC<Props> = ({
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     try {
-      const tasa = tasaDia > 0 ? tasaDia : 100;
+      const tasa = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
       const fechaHoy = fechaHoyVzla;
       const token = getAccessTokenFromStorage() || supabaseAnonKey;
 
@@ -319,8 +349,8 @@ export const VendedorView: React.FC<Props> = ({
           p_pago_movil_bs: pmBs,
           p_punto_bs: ptBs,
           p_divisas_usd: divUSD,
-          p_gasto_bs: gBs,
-          p_gasto_desc: gastoDescripcion.trim() || '',
+          p_gasto_bs: 0,
+          p_gasto_desc: '',
           p_tasa: tasa,
           p_fecha: fechaHoy,
         }),
@@ -375,26 +405,20 @@ export const VendedorView: React.FC<Props> = ({
     return getSemanaLunesSabado(semanaGananciasBase);
   }, [semanaGananciasBase]);
 
-  const semanaGananciasPagada = useMemo(() => {
-    if (!perfil.puesto_id) return false;
-    return liquidaciones.some(
-      (l) =>
-        l.puesto_id === perfil.puesto_id &&
-        l.semana_inicio === infoSemanaGanancias.semanaInicio &&
-        l.pagado !== false
+  // Liquidación de la semana seleccionada si está registrada o pagada
+  const liquidacionSemanaActual = useMemo(() => {
+    if (!perfil.puesto_id) return null;
+    return (
+      liquidaciones.find(
+        (l) =>
+          l.puesto_id === perfil.puesto_id &&
+          l.semana_inicio === infoSemanaGanancias.semanaInicio &&
+          (l.pagado !== false || (l as any).monto_pagado_bs > 0)
+      ) || null
     );
   }, [liquidaciones, perfil.puesto_id, infoSemanaGanancias.semanaInicio]);
 
-  // Liquidación de la semana actual si está pagada
-  const liquidacionSemanaActual = useMemo(() => {
-    if (!perfil.puesto_id) return null;
-    return liquidaciones.find(
-      (l) =>
-        l.puesto_id === perfil.puesto_id &&
-        l.semana_inicio === infoSemanaGanancias.semanaInicio &&
-        l.pagado !== false
-    ) || null;
-  }, [liquidaciones, perfil.puesto_id, infoSemanaGanancias.semanaInicio]);
+  const semanaGananciasPagada = Boolean(liquidacionSemanaActual);
 
   // Comprobante informativo de cobro (Monto en Bs y Tasa BCV aplicada)
   const [comprobantePago, setComprobantePago] = useState<{ montoBs: number; tasa: number } | null>(null);
@@ -405,11 +429,13 @@ export const VendedorView: React.FC<Props> = ({
       return;
     }
 
-    // 1. Si la liquidación guardada ya contiene monto_bs y tasa
-    if (liquidacionSemanaActual.monto_bs && liquidacionSemanaActual.tasa) {
+    // 1. Si la liquidación guardada ya contiene monto_pagado_bs / monto_bs y tasa_pago / tasa
+    const mBsDirecto = (liquidacionSemanaActual as any).monto_pagado_bs ?? liquidacionSemanaActual.monto_bs;
+    const tDirecta = (liquidacionSemanaActual as any).tasa_pago ?? liquidacionSemanaActual.tasa;
+    if (mBsDirecto && tDirecta) {
       setComprobantePago({
-        montoBs: Number(liquidacionSemanaActual.monto_bs),
-        tasa: Number(liquidacionSemanaActual.tasa),
+        montoBs: Number(mBsDirecto),
+        tasa: Number(tDirecta),
       });
       return;
     }
@@ -454,6 +480,26 @@ export const VendedorView: React.FC<Props> = ({
       .catch((err) => console.warn('Aviso cargando comprobante de cobro:', err));
   }, [liquidacionSemanaActual, movimientos]);
 
+  const montoCobradoBs = useMemo(() => {
+    if (!liquidacionSemanaActual) return 0;
+    return Number(
+      (liquidacionSemanaActual as any).monto_pagado_bs ??
+      liquidacionSemanaActual.monto_bs ??
+      comprobantePago?.montoBs ??
+      0
+    );
+  }, [liquidacionSemanaActual, comprobantePago]);
+
+  const tasaCobradoBcv = useMemo(() => {
+    if (!liquidacionSemanaActual) return 0;
+    return Number(
+      (liquidacionSemanaActual as any).tasa_pago ??
+      liquidacionSemanaActual.tasa ??
+      comprobantePago?.tasa ??
+      0
+    );
+  }, [liquidacionSemanaActual, comprobantePago]);
+
   const movimientosSemanaGanancias = useMemo(() => {
     return movimientos.filter((m) => {
       const esPuesto = !perfil.puesto_id || m.puesto_id === perfil.puesto_id;
@@ -469,7 +515,7 @@ export const VendedorView: React.FC<Props> = ({
 
       for (const m of movsDia) {
         if (m.tipo === 'venta' || m.tipo === 'ingreso') {
-          const tasa = Number(m.tasa ?? m.tasa_aplicada ?? tasaDia) || 100;
+          const tasa = Number(m.tasa ?? m.tasa_aplicada ?? (tasaEfectiva > 0 ? tasaEfectiva : tasaDia)) || 1;
           const orig = Number(m.monto_original) || 0;
           if (m.moneda_original === 'USD' || m.moneda === 'USD') {
             totalVentaUSD += orig;
@@ -490,7 +536,7 @@ export const VendedorView: React.FC<Props> = ({
         movimientosCount: movsDia.length,
       };
     });
-  }, [infoSemanaGanancias.dias, movimientosSemanaGanancias, tasaDia, comisionPorcentaje]);
+  }, [infoSemanaGanancias.dias, movimientosSemanaGanancias, tasaEfectiva, tasaDia, comisionPorcentaje]);
 
   const { comisionSemanaUSD, mejorDiaIndex } = useMemo(() => {
     let totalComision = 0;
@@ -602,7 +648,7 @@ export const VendedorView: React.FC<Props> = ({
               </div>
 
               <span className="text-xs font-mono font-bold text-[#166534] bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-1 rounded-md">
-                Tasa: {formatNumber(tasaDia)} Bs/$
+                Tasa: {formatNumber(tasaEfectiva > 0 ? tasaEfectiva : tasaDia)} Bs/$
               </span>
             </div>
 
@@ -745,64 +791,6 @@ export const VendedorView: React.FC<Props> = ({
                 </div>
               </div>
             </div>
-
-            {/* SECCIÓN OPCIONAL COLAPSABLE: GASTOS DEL PUESTO EN EFECTIVO (BS) */}
-            <div className="border border-[#E4E4E7] rounded-lg overflow-hidden bg-zinc-50">
-              <button
-                type="button"
-                onClick={() => setMostrarGastos((prev) => !prev)}
-                className="w-full p-3 text-left flex items-center justify-between text-xs font-bold text-[#18181B] hover:bg-zinc-100 transition-colors"
-              >
-                <span className="flex items-center gap-2">
-                  <span className="text-red-600 font-black">-</span>
-                  <span>Gastos del puesto en efectivo (Bs)</span>
-                  {parseFloat(gastoBs) > 0 && (
-                    <span className="text-[11px] text-red-700 bg-red-100 px-2 py-0.5 rounded font-mono font-bold">
-                      {formatVES(parseFloat(gastoBs))}
-                    </span>
-                  )}
-                </span>
-                {mostrarGastos ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-              </button>
-
-              {mostrarGastos && (
-                <div className="p-3 border-t border-[#E4E4E7] bg-white space-y-2.5">
-                  <p className="text-[11px] text-[#52525B] leading-tight">
-                    Se descuenta <strong>únicamente del efectivo físico a entregar</strong> al cierre. <strong>NO resta comisión</strong> a tu ganancia del día.
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[11px] font-bold text-zinc-600 mb-1">
-                        Monto gastado en efectivo (Bs):
-                      </label>
-                      <input
-                        type="number"
-                        step="any"
-                        inputMode="decimal"
-                        value={gastoBs}
-                        onChange={(e) => setGastoBs(e.target.value)}
-                        disabled={semanaHoyPagada || guardando}
-                        placeholder="0.00"
-                        className="w-full p-2 text-xs font-mono font-bold border border-[#D4D4D8] rounded bg-white text-[#18181B] focus:ring-1 focus:ring-[#2C474E] disabled:bg-zinc-100"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-zinc-600 mb-1">
-                        Concepto del gasto:
-                      </label>
-                      <input
-                        type="text"
-                        value={gastoDescripcion}
-                        onChange={(e) => setGastoDescripcion(e.target.value)}
-                        disabled={semanaHoyPagada || guardando}
-                        placeholder="Ej. Hielo, vasos, servilletas"
-                        className="w-full p-2 text-xs border border-[#D4D4D8] rounded bg-white text-[#18181B] focus:ring-1 focus:ring-[#2C474E] disabled:bg-zinc-100"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
           </div>
 
           {/* TARJETA DE RESUMEN EN VIVO DE HOY */}
@@ -816,7 +804,7 @@ export const VendedorView: React.FC<Props> = ({
                   {formatUSD(resumenCierreHoy.totalVendidoUSD)}
                 </div>
                 <span className="text-[10px] text-[#047857]">
-                  Tasa: {formatNumber(tasaDia)} Bs/$
+                  Tasa: {formatNumber(tasaEfectiva > 0 ? tasaEfectiva : tasaDia)} Bs/$
                 </span>
               </div>
 
@@ -839,18 +827,13 @@ export const VendedorView: React.FC<Props> = ({
                 <div className="text-xs font-bold text-[#18181B] flex justify-between gap-1">
                   <span>Efectivo Bs:</span>
                   <span className="font-mono tabular-nums text-[#166534]">
-                    {formatVES(resumenCierreHoy.efectivoBsNeto)}
+                    {formatVES(resumenCierreHoy.efectivoBsFisico)}
                   </span>
                 </div>
-                {resumenCierreHoy.gBs > 0 && (
-                  <span className="block text-[9px] text-zinc-500 text-right">
-                    (Descontado {formatVES(resumenCierreHoy.gBs)} de gasto)
-                  </span>
-                )}
                 <div className="text-xs font-bold text-[#18181B] flex justify-between gap-1 mt-0.5">
                   <span>Divisas $:</span>
                   <span className="font-mono tabular-nums text-[#059669]">
-                    {formatUSD(resumenCierreHoy.divisasUSDNeto)}
+                    {formatUSD(resumenCierreHoy.divisasUSDFisico)}
                   </span>
                 </div>
               </div>
@@ -921,7 +904,7 @@ export const VendedorView: React.FC<Props> = ({
               </div>
 
               <span className="text-[11px] font-mono font-bold text-[#86EFAC] bg-white/10 px-2 py-0.5 rounded border border-white/10">
-                Tasa: {formatNumber(tasaDia)} Bs/$
+                Tasa: {formatNumber(tasaEfectiva > 0 ? tasaEfectiva : tasaDia)} Bs/$
               </span>
             </div>
 
@@ -948,9 +931,9 @@ export const VendedorView: React.FC<Props> = ({
                       <CheckCircle2 size={14} />
                       <span>Pagado ✓</span>
                     </span>
-                    {comprobantePago && (
+                    {montoCobradoBs > 0 && tasaCobradoBcv > 0 && (
                       <span className="text-[11px] text-[#86EFAC] font-mono mt-1 font-semibold">
-                        Cobrado: {formatVES(comprobantePago.montoBs)} (Tasa BCV: {formatNumber(comprobantePago.tasa)} Bs/$)
+                        Cobrado: {formatVES(montoCobradoBs)} (Tasa BCV: {formatNumber(tasaCobradoBcv)} Bs/$)
                       </span>
                     )}
                   </div>

@@ -97,7 +97,10 @@ export interface LiquidacionSemanal {
   monto_comision_usd?: number;
   monto_usd?: number;
   monto_bs?: number;
+  monto_pagado_bs?: number;
   tasa?: number;
+  tasa_pago?: number;
+  metodo_pago?: string;
   pagado?: boolean;
   fecha_pago?: string;
   movimiento_id?: string | null;
