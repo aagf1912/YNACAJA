@@ -15,17 +15,9 @@ export const supabase = isConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;
 
-// Claves de respaldo en localStorage
+// Claves de respaldo en localStorage únicamente para contingencia de red en balance y config
 const LOCAL_KEY_CONFIG = 'ynacaja_config_negocio';
 const LOCAL_KEY_MOVIMIENTOS = 'ynacaja_movimientos';
-const LOCAL_KEY_PUESTOS = 'ynacaja_puestos';
-const LOCAL_KEY_PERFIL = 'ynacaja_perfil_usuario';
-
-// Puestos iniciales por defecto si no hay conexión
-const PUESTOS_DEFAULT: Puesto[] = [
-  { id: 'puesto-principal', nombre: 'Puesto Principal', porcentaje_comision: 22.0, activo: true },
-  { id: 'puesto-2', nombre: 'Puesto 2', porcentaje_comision: 22.0, activo: true },
-];
 
 function getLocalConfig(): ConfigNegocio {
   try {
@@ -44,20 +36,6 @@ function getLocalConfig(): ConfigNegocio {
 
 function setLocalConfig(config: ConfigNegocio) {
   localStorage.setItem(LOCAL_KEY_CONFIG, JSON.stringify(config));
-}
-
-function getLocalPuestos(): Puesto[] {
-  try {
-    const raw = localStorage.getItem(LOCAL_KEY_PUESTOS);
-    if (raw) return JSON.parse(raw);
-  } catch (e) {
-    console.warn('Error leyendo puestos locales:', e);
-  }
-  return PUESTOS_DEFAULT;
-}
-
-function setLocalPuestos(puestos: Puesto[]) {
-  localStorage.setItem(LOCAL_KEY_PUESTOS, JSON.stringify(puestos));
 }
 
 function getLocalMovimientos(): Movimiento[] {
@@ -97,8 +75,12 @@ export async function getPerfilUsuario(userId: string): Promise<PerfilUsuario> {
         .eq('id', userId)
         .maybeSingle();
 
-      if (!error && data) {
-        const perfil: PerfilUsuario = {
+      if (error) {
+        console.warn('Error consultando perfil en Supabase:', error.message);
+      }
+
+      if (data) {
+        return {
           id: data.id,
           nombre: data.nombre || 'Usuario',
           rol: (data.rol as RolUsuario) || 'admin',
@@ -106,8 +88,6 @@ export async function getPerfilUsuario(userId: string): Promise<PerfilUsuario> {
           puesto: data.puesto || null,
           created_at: data.created_at,
         };
-        localStorage.setItem(LOCAL_KEY_PERFIL, JSON.stringify(perfil));
-        return perfil;
       }
     } catch (err) {
       console.warn('Error al consultar perfil en Supabase:', err);
@@ -115,15 +95,13 @@ export async function getPerfilUsuario(userId: string): Promise<PerfilUsuario> {
   }
 
   // Fallback: Si no tiene fila en perfiles, se trata como admin por defecto para Ynaides
-  const fallbackPerfil: PerfilUsuario = {
+  return {
     id: userId,
     nombre: 'Administrador (Ynaides)',
     rol: 'admin',
     puesto_id: null,
     puesto: null,
   };
-  localStorage.setItem(LOCAL_KEY_PERFIL, JSON.stringify(fallbackPerfil));
-  return fallbackPerfil;
 }
 
 export async function signOutUsuario(): Promise<void> {
@@ -134,7 +112,6 @@ export async function signOutUsuario(): Promise<void> {
       console.warn('Error cerrando sesión:', e);
     }
   }
-  localStorage.removeItem(LOCAL_KEY_PERFIL);
 }
 
 // ======================================================================
@@ -191,90 +168,98 @@ export async function updateTasaDia(nuevaTasa: number): Promise<ConfigNegocio> {
 }
 
 // ======================================================================
-// GESTIÓN DE PUESTOS
+// GESTIÓN DE PUESTOS (Directamente desde Supabase)
 // ======================================================================
 
 export async function getPuestos(): Promise<Puesto[]> {
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('puestos')
-        .select('*')
-        .order('nombre', { ascending: true });
-
-      if (!error && data && data.length > 0) {
-        setLocalPuestos(data);
-        return data;
-      }
-    } catch (err) {
-      console.warn('Fallo red get puestos:', err);
-    }
+  if (!supabase) {
+    return [];
   }
-  return getLocalPuestos();
+
+  const { data, error } = await supabase
+    .from('puestos')
+    .select('*')
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.error('Error al consultar puestos:', error);
+    throw new Error(`Error al consultar puestos en Supabase: ${error.message} (Código: ${error.code || 'N/A'})`);
+  }
+
+  return data || [];
 }
 
 export async function crearPuesto(puesto: Omit<Puesto, 'id' | 'created_at'>): Promise<Puesto> {
-  const nuevoPuesto: Puesto = {
-    ...puesto,
-    id: crypto.randomUUID ? crypto.randomUUID() : `pto_${Date.now()}`,
-    created_at: new Date().toISOString(),
-  };
-
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('puestos')
-        .insert({
-          nombre: puesto.nombre,
-          porcentaje_comision: puesto.porcentaje_comision,
-          activo: puesto.activo,
-        })
-        .select()
-        .single();
-
-      if (!error && data) {
-        const local = getLocalPuestos();
-        setLocalPuestos([...local, data]);
-        return data;
-      }
-      console.warn('Error creando puesto en Supabase:', error?.message);
-    } catch (err) {
-      console.warn('Fallo red crear puesto:', err);
-    }
+  if (!supabase) {
+    throw new Error('Supabase no está configurado en el cliente.');
   }
 
-  const local = getLocalPuestos();
-  setLocalPuestos([...local, nuevoPuesto]);
-  return nuevoPuesto;
+  const { data, error } = await supabase
+    .from('puestos')
+    .insert({
+      nombre: puesto.nombre,
+      porcentaje_comision: puesto.porcentaje_comision,
+      activo: puesto.activo,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creando puesto:', error);
+    throw new Error(`Error al crear puesto en Supabase: ${error.message} (Código: ${error.code || 'N/A'}${error.details ? ` - ${error.details}` : ''})`);
+  }
+
+  if (!data) {
+    throw new Error('No se recibió el puesto creado desde Supabase.');
+  }
+
+  return data;
 }
 
 export async function actualizarPuesto(puesto: Puesto): Promise<Puesto> {
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('puestos')
-        .update({
-          nombre: puesto.nombre,
-          porcentaje_comision: puesto.porcentaje_comision,
-          activo: puesto.activo,
-        })
-        .eq('id', puesto.id)
-        .select()
-        .single();
-
-      if (!error && data) {
-        const local = getLocalPuestos().map((p) => (p.id === puesto.id ? data : p));
-        setLocalPuestos(local);
-        return data;
-      }
-    } catch (err) {
-      console.warn('Fallo red actualizar puesto:', err);
-    }
+  if (!supabase) {
+    throw new Error('Supabase no está configurado en el cliente.');
   }
 
-  const local = getLocalPuestos().map((p) => (p.id === puesto.id ? puesto : p));
-  setLocalPuestos(local);
-  return puesto;
+  const { data, error } = await supabase
+    .from('puestos')
+    .update({
+      nombre: puesto.nombre,
+      porcentaje_comision: puesto.porcentaje_comision,
+      activo: puesto.activo,
+    })
+    .eq('id', puesto.id)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error actualizando puesto:', error);
+    throw new Error(`Error al actualizar puesto en Supabase: ${error.message} (Código: ${error.code || 'N/A'}${error.details ? ` - ${error.details}` : ''})`);
+  }
+
+  if (!data) {
+    throw new Error('No se recibió el puesto actualizado desde Supabase.');
+  }
+
+  return data;
+}
+
+export async function eliminarPuesto(id: string): Promise<boolean> {
+  if (!supabase) {
+    throw new Error('Supabase no está configurado en el cliente.');
+  }
+
+  const { error } = await supabase
+    .from('puestos')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error eliminando puesto:', error);
+    throw new Error(`Error al eliminar puesto en Supabase: ${error.message} (Código: ${error.code || 'N/A'}${error.details ? ` - ${error.details}` : ''})`);
+  }
+
+  return true;
 }
 
 // ======================================================================
