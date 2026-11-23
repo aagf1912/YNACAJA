@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -11,6 +11,8 @@ import {
   PieChart as PieIcon,
   BarChart2,
   Store,
+  CheckCircle2,
+  Loader2,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -28,73 +30,131 @@ import {
 import { toPng } from 'html-to-image';
 import { Share } from '@capacitor/share';
 import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Movimiento, Puesto, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento } from '../types';
+import { Movimiento, Puesto, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento, LiquidacionSemanal } from '../types';
 import { calcularMontos, formatNumber, formatPorcentaje, formatUSD, formatVES } from '../utils/format';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
+import { getSemanaLunesSabado, shiftSemana } from '../utils/dateUtils';
+import { getVenezuelaDate } from '../utils/parserLocal';
+import { getLiquidacionesSemanales, registrarLiquidacionSemanal, insertMovimientos } from '../services/supabase';
 
 interface Props {
   movimientos: Movimiento[];
   puestos?: Puesto[];
+  tasaActual?: number;
+  onGuardarMovimientos?: (movs: Omit<Movimiento, 'id' | 'created_at'>[]) => Promise<Movimiento[]>;
 }
 
-export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
+export const BalanceView: React.FC<Props> = ({
+  movimientos,
+  puestos = [],
+  tasaActual = 100,
+  onGuardarMovimientos,
+}) => {
   const reportRef = useRef<HTMLDivElement>(null);
   const [compartiendo, setCompartiendo] = useState(false);
   const [filtroPuesto, setFiltroPuesto] = useState<string>('todos');
 
   // Fecha base para la semana (por defecto hoy)
   const [fechaSemana, setFechaSemana] = useState<Date>(() => new Date());
+  const [liquidaciones, setLiquidaciones] = useState<LiquidacionSemanal[]>([]);
+  const [liquidandoPuestoId, setLiquidandoPuestoId] = useState<string | null>(null);
 
-  // Calcula lunes y domingo de la semana seleccionada
-  const { lunes, domingo, diasSemana, rangoTexto } = useMemo(() => {
-    const d = new Date(fechaSemana);
-    const day = d.getDay(); // 0 es domingo
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    const lunesDate = new Date(d.setDate(diff));
-    lunesDate.setHours(0, 0, 0, 0);
-
-    const dias: { fechaStr: string; nombreDia: string; dateObj: Date }[] = [];
-    const nombresDias = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
-
-    for (let i = 0; i < 7; i++) {
-      const cur = new Date(lunesDate);
-      cur.setDate(lunesDate.getDate() + i);
-      const yyyy = cur.getFullYear();
-      const mm = String(cur.getMonth() + 1).padStart(2, '0');
-      const dd = String(cur.getDate()).padStart(2, '0');
-      dias.push({
-        fechaStr: `${yyyy}-${mm}-${dd}`,
-        nombreDia: nombresDias[i],
-        dateObj: cur,
-      });
+  // Cargar liquidaciones semanales
+  const cargarLiquidaciones = useCallback(async () => {
+    try {
+      const data = await getLiquidacionesSemanales();
+      setLiquidaciones(data);
+    } catch (err) {
+      console.warn('Error cargando liquidaciones en BalanceView:', err);
     }
+  }, []);
 
-    const domingoDate = dias[6].dateObj;
-    domingoDate.setHours(23, 59, 59, 999);
+  useEffect(() => {
+    cargarLiquidaciones();
+  }, [cargarLiquidaciones]);
 
-    const mesLunes = lunesDate.toLocaleString('es-VE', { month: 'short' }).toUpperCase().replace('.', '');
-    const mesDomingo = domingoDate.toLocaleString('es-VE', { month: 'short' }).toUpperCase().replace('.', '');
-    const anio = domingoDate.getFullYear();
-
-    const rango =
-      mesLunes === mesDomingo
-        ? `${lunesDate.getDate()} AL ${domingoDate.getDate()} ${mesDomingo} ${anio}`
-        : `${lunesDate.getDate()} ${mesLunes} AL ${domingoDate.getDate()} ${mesDomingo} ${anio}`;
-
-    return {
-      lunes: lunesDate,
-      domingo: domingoDate,
-      diasSemana: dias,
-      rangoTexto: rango,
-    };
+  // Calcula lunes a sábado de la semana seleccionada (estricto 6 días)
+  const infoSemana = useMemo(() => {
+    return getSemanaLunesSabado(fechaSemana);
   }, [fechaSemana]);
 
-  // Todos los movimientos dentro de la semana
+  const { dias: diasSemana, rangoTexto } = infoSemana;
+
+  // Todos los movimientos dentro de la semana (Lunes a Sábado)
   const movimientosSemana = useMemo(() => {
-    const fechaInicioStr = diasSemana[0].fechaStr;
-    const fechaFinStr = diasSemana[6].fechaStr;
-    return movimientos.filter((m) => m.fecha >= fechaInicioStr && m.fecha <= fechaFinStr);
-  }, [movimientos, diasSemana]);
+    return movimientos.filter(
+      (m) => m.fecha >= infoSemana.semanaInicio && m.fecha <= infoSemana.semanaFin
+    );
+  }, [movimientos, infoSemana.semanaInicio, infoSemana.semanaFin]);
+
+  // Comprobar si un puesto ya fue liquidado en esta semana
+  const isPuestoLiquidado = useCallback(
+    (puestoId: string) => {
+      return liquidaciones.some(
+        (l) =>
+          l.puesto_id === puestoId &&
+          l.semana_inicio === infoSemana.semanaInicio &&
+          l.pagado !== false
+      );
+    },
+    [liquidaciones, infoSemana.semanaInicio]
+  );
+
+  // Pagar comisión de vendedor (Liquidación como Gasto en movimientos y registro en liquidaciones_semanales)
+  const handlePagarComision = async (p: { id: string; nombre: string; comisionUSD: number }) => {
+    if (isPuestoLiquidado(p.id) || p.comisionUSD <= 0) return;
+    const tasa = tasaActual > 0 ? tasaActual : 100;
+    const montoComision = p.comisionUSD;
+    const montoBs = Math.round(montoComision * tasa * 100) / 100;
+
+    const confirmar = window.confirm(
+      `¿Confirmas el pago de comisión de ${formatUSD(montoComision)} (${formatVES(montoBs)}) para el puesto "${p.nombre}" por la semana ${rangoTexto}?\n\nSe registrará automáticamente como un gasto de "Sueldos / Comisiones" y la semana quedará marcada como Pagada ✓.`
+    );
+    if (!confirmar) return;
+
+    setLiquidandoPuestoId(p.id);
+    try {
+      const nuevoMov: Omit<Movimiento, 'id' | 'created_at'> = {
+        fecha: getVenezuelaDate(),
+        descripcion: `Pago Comisión Semana ${rangoTexto} - ${p.nombre}`,
+        tipo: 'gasto',
+        naturaleza: 'Negocio',
+        categoria: 'Sueldos / Comisiones',
+        metodo_pago: 'efectivo_bs',
+        moneda_original: 'USD',
+        monto_original: montoComision,
+        tasa_aplicada: tasa,
+        tasa,
+        monto_usd: montoComision,
+        monto_bs: montoBs,
+        puesto_id: p.id,
+      };
+
+      if (onGuardarMovimientos) {
+        await onGuardarMovimientos([nuevoMov]);
+      } else {
+        await insertMovimientos([nuevoMov]);
+      }
+
+      await registrarLiquidacionSemanal({
+        puesto_id: p.id,
+        semana_inicio: infoSemana.semanaInicio,
+        semana_fin: infoSemana.semanaFin,
+        monto_usd: montoComision,
+        monto_bs: montoBs,
+        tasa,
+        pagado: true,
+        fecha_pago: getVenezuelaDate(),
+      });
+
+      await cargarLiquidaciones();
+    } catch (err: any) {
+      console.error('Error al pagar comisión:', err);
+      alert(err?.message || 'Error al procesar el pago de comisión.');
+    } finally {
+      setLiquidandoPuestoId(null);
+    }
+  };
 
   // Movimientos de la semana filtrados por puesto (si está activo un filtro)
   const movimientosSemanaFiltrados = useMemo(() => {
@@ -387,19 +447,11 @@ export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
 
   // Navegación Semanas
   const anteriorSemana = () => {
-    setFechaSemana((prev) => {
-      const n = new Date(prev);
-      n.setDate(n.getDate() - 7);
-      return n;
-    });
+    setFechaSemana((prev) => shiftSemana(prev, -1));
   };
 
   const siguienteSemana = () => {
-    setFechaSemana((prev) => {
-      const n = new Date(prev);
-      n.setDate(n.getDate() + 7);
-      return n;
-    });
+    setFechaSemana((prev) => shiftSemana(prev, 1));
   };
 
   // Exportar Excel (CSV con UTF-8 BOM)
@@ -680,33 +732,66 @@ export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
                   <th className="py-2 px-3 text-right">Total Ventas ($)</th>
                   <th className="py-2 px-3 text-right text-[#047857]">Comisión Vendedores ($)</th>
                   <th className="py-2 px-3 text-right text-[#166534]">Neto Negocio ($)</th>
+                  <th className="py-2 px-3 text-right">Liquidación</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E4E4E7]">
-                {resumenPorPuesto.items.map((p) => (
-                  <tr key={p.id} className="hover:bg-zinc-50 transition-colors">
-                    <td className="py-2.5 px-3 font-bold text-[#18181B]">
-                      {p.nombre}
-                      {p.porcentaje > 0 && (
-                        <span className="ml-1.5 text-[10px] text-zinc-500 font-mono font-normal">
-                          ({p.porcentaje}%)
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-2.5 text-center tabular-nums text-zinc-500">
-                      {p.ventasCount}
-                    </td>
-                    <td className="py-2.5 px-3 text-right tabular-nums font-bold text-[#18181B]">
-                      {formatUSD(p.totalUSD)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right tabular-nums font-bold text-[#047857] font-mono">
-                      ({formatUSD(p.comisionUSD)})
-                    </td>
-                    <td className="py-2.5 px-3 text-right tabular-nums font-black text-[#166534]">
-                      {formatUSD(p.netoUSD)}
-                    </td>
-                  </tr>
-                ))}
+                {resumenPorPuesto.items.map((p) => {
+                  const liquidado = isPuestoLiquidado(p.id);
+                  return (
+                    <tr key={p.id} className="hover:bg-zinc-50 transition-colors">
+                      <td className="py-2.5 px-3 font-bold text-[#18181B]">
+                        {p.nombre}
+                        {p.porcentaje > 0 && (
+                          <span className="ml-1.5 text-[10px] text-zinc-500 font-mono font-normal">
+                            ({p.porcentaje}%)
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-2.5 text-center tabular-nums text-zinc-500">
+                        {p.ventasCount}
+                      </td>
+                      <td className="py-2.5 px-3 text-right tabular-nums font-bold text-[#18181B]">
+                        {formatUSD(p.totalUSD)}
+                      </td>
+                      <td className="py-2.5 px-3 text-right tabular-nums font-bold text-[#047857] font-mono">
+                        ({formatUSD(p.comisionUSD)})
+                      </td>
+                      <td className="py-2.5 px-3 text-right tabular-nums font-black text-[#166534]">
+                        {formatUSD(p.netoUSD)}
+                      </td>
+                      <td className="py-2.5 px-3 text-right">
+                        {liquidado ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#ECFDF5] text-[#166534] border border-[#A7F3D0]">
+                            <CheckCircle2 size={12} />
+                            <span>Pagado ✓</span>
+                          </span>
+                        ) : p.comisionUSD > 0 && p.id !== 'sin-puesto' ? (
+                          <button
+                            type="button"
+                            onClick={() => handlePagarComision(p)}
+                            disabled={liquidandoPuestoId === p.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#166534] hover:bg-[#14532d] active:bg-[#0f3d21] text-white shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+                          >
+                            {liquidandoPuestoId === p.id ? (
+                              <>
+                                <Loader2 size={12} className="animate-spin text-white" />
+                                <span>Pagando...</span>
+                              </>
+                            ) : (
+                              <>
+                                <CheckCircle2 size={12} className="text-[#86EFAC]" />
+                                <span>Pagar Comisión ({formatUSD(p.comisionUSD)})</span>
+                              </>
+                            )}
+                          </button>
+                        ) : (
+                          <span className="text-zinc-400 text-xs italic">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
               <tfoot>
                 <tr className="bg-zinc-100 font-bold border-t-2 border-[#2C474E] text-[#18181B]">
@@ -723,6 +808,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
                   <td className="py-2.5 px-3 text-right tabular-nums text-[#166534]">
                     {formatUSD(resumenPorPuesto.totalNeto)}
                   </td>
+                  <td className="py-2.5 px-3"></td>
                 </tr>
               </tfoot>
             </table>

@@ -85,7 +85,7 @@ export const RegistrarView: React.FC<Props> = ({
       const aGuardar = movimientosExtraidos.map((m) => ({
         fecha: m.fecha || fechaActual,
         descripcion: m.descripcion,
-        tipo: m.tipo,
+        tipo: (m.tipo === 'ingreso' || m.tipo === 'venta') ? ('venta' as const) : ('gasto' as const),
         naturaleza: m.naturaleza,
         categoria: m.categoria,
         metodo_pago: m.metodo_pago,

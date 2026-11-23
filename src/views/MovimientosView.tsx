@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Search, Pencil, Trash2, Calendar, Plus, Store } from 'lucide-react';
-import { Movimiento, Puesto } from '../types';
+import { Movimiento, Puesto, TipoMovimiento } from '../types';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
 import { calcularMontos, formatMontoMovimiento, formatUSD } from '../utils/format';
 import { METODOS_PAGO_LABELS } from '../types';
@@ -110,10 +110,12 @@ export const MovimientosView: React.FC<Props> = ({
   };
 
   const handleGuardarModal = async (mov: Omit<Movimiento, 'id' | 'created_at'> & { id?: string }) => {
+    const tipoNormalizado: TipoMovimiento = mov.tipo === 'ingreso' || mov.tipo === 'venta' ? 'venta' : 'gasto';
+    const movLimpio = { ...mov, tipo: tipoNormalizado };
     if (mov.id) {
-      await onActualizarMovimiento(mov as Movimiento);
+      await onActualizarMovimiento(movLimpio as Movimiento);
     } else {
-      await onCrearMovimiento(mov);
+      await onCrearMovimiento(movLimpio);
     }
   };
 

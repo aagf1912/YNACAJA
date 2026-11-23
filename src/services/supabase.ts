@@ -1,5 +1,5 @@
 import { createClient, User } from '@supabase/supabase-js';
-import { ConfigNegocio, Movimiento, PerfilUsuario, Puesto, RolUsuario, TipoMovimiento } from '../types';
+import { ConfigNegocio, LiquidacionSemanal, Movimiento, PerfilUsuario, Puesto, RolUsuario, TipoMovimiento } from '../types';
 
 // Fallback de configuración pública de Supabase para builds web (ej. Cloudflare Pages)
 const FALLBACK_SUPABASE_URL = 'https://xbjywyzuhtbmuusytsty.supabase.co';
@@ -35,6 +35,7 @@ export const supabase = isConfigured
 // Claves de respaldo en localStorage únicamente para contingencia de red en balance y config
 const LOCAL_KEY_CONFIG = 'ynacaja_config_negocio';
 const LOCAL_KEY_MOVIMIENTOS = 'ynacaja_movimientos';
+const LOCAL_KEY_LIQUIDACIONES = 'ynacaja_liquidaciones_semanales';
 
 function getLocalConfig(): ConfigNegocio {
   try {
@@ -67,6 +68,20 @@ function getLocalMovimientos(): Movimiento[] {
 
 function setLocalMovimientos(movs: Movimiento[]) {
   localStorage.setItem(LOCAL_KEY_MOVIMIENTOS, JSON.stringify(movs));
+}
+
+function getLocalLiquidaciones(): LiquidacionSemanal[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_KEY_LIQUIDACIONES);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.warn('Error leyendo liquidaciones locales:', e);
+  }
+  return [];
+}
+
+function setLocalLiquidaciones(liqs: LiquidacionSemanal[]) {
+  localStorage.setItem(LOCAL_KEY_LIQUIDACIONES, JSON.stringify(liqs));
 }
 
 // ======================================================================
@@ -577,7 +592,7 @@ export async function getMovimientos(rol?: RolUsuario, puestoId?: string | null)
 
         const movimientosCompletos: Movimiento[] = data.map((item: any) => ({
           ...item,
-          tipo: item.tipo as TipoMovimiento,
+          tipo: (item.tipo === 'ingreso' || item.tipo === 'venta') ? 'venta' : 'gasto',
           puesto: item.puesto || (item.puesto_id ? puestosMap[item.puesto_id] || null : null),
         }));
 
@@ -609,7 +624,7 @@ export async function getVentasHoyPuesto(puestoId: string, fecha: string): Promi
       if (!error && data) {
         return data.map((item: any) => ({
           ...item,
-          tipo: item.tipo as TipoMovimiento,
+          tipo: (item.tipo === 'ingreso' || item.tipo === 'venta') ? 'venta' : 'gasto',
         }));
       }
       console.warn('Error consultando ventas hoy en Supabase:', error?.message);
@@ -636,9 +651,12 @@ export async function insertMovimientos(
     const monto_usd = m.monto_usd ?? (m.moneda_original === 'USD' ? montoOrig : (tasa > 0 ? montoOrig / tasa : 0));
     const monto_bs = m.monto_bs ?? (m.moneda_original === 'USD' ? montoOrig * tasa : montoOrig);
     const userId = m.user_id || m.creado_por || null;
+    // Estándar único: siempre 'venta' para ingresos/ventas y 'gasto' para egresos/gastos
+    const tipoNormalizado: TipoMovimiento = (m.tipo === 'ingreso' || m.tipo === 'venta') ? 'venta' : 'gasto';
 
     return {
       ...m,
+      tipo: tipoNormalizado,
       id: crypto.randomUUID ? crypto.randomUUID() : `mov_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       created_at: new Date().toISOString(),
       tasa_aplicada: tasa,
@@ -705,6 +723,8 @@ export async function updateMovimiento(mov: Movimiento): Promise<Movimiento> {
   const monto_usd = mov.monto_usd ?? (mov.moneda_original === 'USD' ? montoOrig : (tasa > 0 ? montoOrig / tasa : 0));
   const monto_bs = mov.monto_bs ?? (mov.moneda_original === 'USD' ? montoOrig * tasa : montoOrig);
   const userId = mov.user_id || mov.creado_por || null;
+  // Estándar único: siempre 'venta' o 'gasto'
+  const tipoNormalizado: TipoMovimiento = (mov.tipo === 'ingreso' || mov.tipo === 'venta') ? 'venta' : 'gasto';
 
   if (supabase) {
     try {
@@ -713,7 +733,7 @@ export async function updateMovimiento(mov: Movimiento): Promise<Movimiento> {
         .update({
           fecha: mov.fecha,
           descripcion: mov.descripcion,
-          tipo: mov.tipo,
+          tipo: tipoNormalizado,
           naturaleza: mov.naturaleza,
           categoria: mov.categoria,
           metodo_pago: mov.metodo_pago,
@@ -746,9 +766,9 @@ export async function updateMovimiento(mov: Movimiento): Promise<Movimiento> {
     }
   }
 
-  const local = getLocalMovimientos().map((m) => (m.id === mov.id ? mov : m));
+  const local = getLocalMovimientos().map((m) => (m.id === mov.id ? { ...mov, tipo: tipoNormalizado } : m));
   setLocalMovimientos(local);
-  return mov;
+  return { ...mov, tipo: tipoNormalizado };
 }
 
 export async function deleteMovimiento(id: string): Promise<boolean> {
@@ -773,4 +793,118 @@ export async function deleteMovimiento(id: string): Promise<boolean> {
   const local = getLocalMovimientos().filter((m) => m.id !== id);
   setLocalMovimientos(local);
   return true;
+}
+
+/**
+ * Elimina todos los movimientos de un puesto en una fecha específica (para reescribir Cierre Diario sin duplicados)
+ */
+export async function eliminarMovimientosDiaPuesto(puestoId: string, fecha: string): Promise<boolean> {
+  if (supabase) {
+    try {
+      const { error } = await supabase
+        .from('movimientos')
+        .delete()
+        .eq('puesto_id', puestoId)
+        .eq('fecha', fecha);
+
+      if (error) {
+        console.warn('Aviso eliminando movimientos previos del puesto en la fecha:', error.message);
+      }
+    } catch (err) {
+      console.warn('Excepción al eliminar movimientos del día en Supabase:', err);
+    }
+  }
+
+  // Eliminar también en contingencia local
+  const local = getLocalMovimientos().filter((m) => !(m.puesto_id === puestoId && m.fecha === fecha));
+  setLocalMovimientos(local);
+  return true;
+}
+
+// ======================================================================
+// LIQUIDACIONES SEMANALES (Sueldos y Comisiones)
+// ======================================================================
+
+export async function getLiquidacionesSemanales(puestoId?: string): Promise<LiquidacionSemanal[]> {
+  if (supabase) {
+    try {
+      let query = supabase
+        .from('liquidaciones_semanales')
+        .select('*')
+        .order('semana_inicio', { ascending: false });
+
+      if (puestoId) {
+        query = query.eq('puesto_id', puestoId);
+      }
+
+      const { data, error } = await query;
+      if (!error && data) {
+        setLocalLiquidaciones(data);
+        return data;
+      }
+      if (error) {
+        console.warn('Aviso consultando liquidaciones_semanales en Supabase:', error.message);
+      }
+    } catch (err) {
+      console.warn('Excepción consultando liquidaciones_semanales:', err);
+    }
+  }
+
+  const local = getLocalLiquidaciones();
+  if (puestoId) {
+    return local.filter((l) => l.puesto_id === puestoId);
+  }
+  return local;
+}
+
+export async function registrarLiquidacionSemanal(
+  liq: Omit<LiquidacionSemanal, 'id' | 'created_at'>
+): Promise<LiquidacionSemanal> {
+  const nuevaLiq: LiquidacionSemanal = {
+    ...liq,
+    id: crypto.randomUUID ? crypto.randomUUID() : `liq_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    pagado: true,
+    created_at: new Date().toISOString(),
+  };
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('liquidaciones_semanales')
+        .upsert({
+          puesto_id: nuevaLiq.puesto_id,
+          semana_inicio: nuevaLiq.semana_inicio,
+          semana_fin: nuevaLiq.semana_fin,
+          monto_usd: nuevaLiq.monto_usd,
+          monto_bs: nuevaLiq.monto_bs,
+          tasa: nuevaLiq.tasa,
+          pagado: true,
+          fecha_pago: nuevaLiq.fecha_pago || new Date().toISOString().split('T')[0],
+        })
+        .select()
+        .maybeSingle();
+
+      if (!error && data) {
+        const local = getLocalLiquidaciones().filter(
+          (l) => !(l.puesto_id === nuevaLiq.puesto_id && l.semana_inicio === nuevaLiq.semana_inicio)
+        );
+        local.unshift(data);
+        setLocalLiquidaciones(local);
+        return data;
+      }
+      if (error) {
+        console.warn('Aviso guardando liquidacion_semanal en Supabase:', error.message);
+      }
+    } catch (err) {
+      console.warn('Excepción guardando liquidacion_semanal:', err);
+    }
+  }
+
+  // Fallback local
+  const local = getLocalLiquidaciones().filter(
+    (l) => !(l.puesto_id === nuevaLiq.puesto_id && l.semana_inicio === nuevaLiq.semana_inicio)
+  );
+  local.unshift(nuevaLiq);
+  setLocalLiquidaciones(local);
+  return nuevaLiq;
 }

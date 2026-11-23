@@ -255,7 +255,12 @@ export const App: React.FC = () => {
             )}
 
             {activeTab === 'balance' && (
-              <BalanceView movimientos={movimientos} puestos={puestos} />
+              <BalanceView
+                movimientos={movimientos}
+                puestos={puestos}
+                tasaActual={tasaDia}
+                onGuardarMovimientos={handleGuardarMovimientos}
+              />
             )}
           </>
         )}

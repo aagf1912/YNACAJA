@@ -12,7 +12,8 @@ export type CategoriaMovimiento =
   | 'Insumos y Empaques'
   | 'Comidas y Bebidas'
   | 'Hielo y Varios Operativos'
-  | 'Recargas y Servicios';
+  | 'Recargas y Servicios'
+  | 'Sueldos / Comisiones';
 
 export type MetodoPago = 'pago_movil' | 'punto_venta' | 'efectivo_bs' | 'divisa';
 
@@ -83,7 +84,22 @@ export const CATEGORIAS_GASTO: { nombre: CategoriaMovimiento; naturaleza: Natura
   { nombre: 'Comidas y Bebidas', naturaleza: 'Personal' },
   { nombre: 'Hielo y Varios Operativos', naturaleza: 'Negocio' },
   { nombre: 'Recargas y Servicios', naturaleza: 'Negocio' },
+  { nombre: 'Sueldos / Comisiones', naturaleza: 'Negocio' },
 ];
+
+export interface LiquidacionSemanal {
+  id?: string;
+  puesto_id: string;
+  semana_inicio: string; // YYYY-MM-DD (Lunes)
+  semana_fin: string;    // YYYY-MM-DD (Sábado)
+  monto_usd?: number;
+  monto_bs?: number;
+  tasa?: number;
+  pagado?: boolean;
+  fecha_pago?: string;
+  movimiento_id?: string | null;
+  created_at?: string;
+}
 
 export const METODOS_PAGO_LABELS: Record<MetodoPago, string> = {
   pago_movil: 'Pago Móvil',

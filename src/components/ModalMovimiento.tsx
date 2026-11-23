@@ -49,7 +49,7 @@ export const ModalMovimiento: React.FC<Props> = ({
 
   useEffect(() => {
     if (movimientoAEditar) {
-      setTipo(movimientoAEditar.tipo);
+      setTipo(movimientoAEditar.tipo === 'ingreso' || movimientoAEditar.tipo === 'venta' ? 'venta' : 'gasto');
       setFecha(movimientoAEditar.fecha);
       setDescripcion(movimientoAEditar.descripcion);
       setCategoria(movimientoAEditar.categoria);
@@ -120,7 +120,7 @@ export const ModalMovimiento: React.FC<Props> = ({
         ...(movimientoAEditar ? { id: movimientoAEditar.id } : {}),
         fecha,
         descripcion: descripcion.trim(),
-        tipo,
+        tipo: tipo === 'ingreso' || tipo === 'venta' ? 'venta' : 'gasto',
         naturaleza,
         categoria,
         metodo_pago: metodoPago,
