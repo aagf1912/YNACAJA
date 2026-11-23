@@ -1,5 +1,5 @@
 // Cloudflare Pages Function: functions/api/analizar.ts
-// Backend serverless para analizar texto de ventas y gastos de Chicha Adictiva usando Gemini con reintentos y fallback dinámico
+// Backend serverless para analizar texto de ventas y gastos de Chicha Adictiva usando Gemini 3.8 Flash
 
 interface Env {
   GEMINI_API_KEY: string;
@@ -15,15 +15,13 @@ const TIMEOUT_MS = 15000;
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Ejecuta una petición directa a generateContent con timeout de 15s
+ * Ejecuta una petición directa a Gemini 3.8 Flash con AbortSignal.timeout(15000)
  */
 async function ejecutarLlamadaGemini(
-  modelo: string,
   apiKey: string,
   payload: any
 ): Promise<{ ok: boolean; status: number; text: string; data?: any }> {
-  const modelClean = modelo.replace(/^models\//, '');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelClean}:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
 
   try {
     const res = await fetch(url, {
@@ -51,16 +49,15 @@ async function ejecutarLlamadaGemini(
 }
 
 /**
- * Llama a Gemini con hasta N reintentos si responde 503 o 429
+ * Llama a Gemini 3.8 Flash con hasta 4 reintentos si responde 503 o 429 (esperando 2s entre cada uno)
  */
 async function llamarConReintentos(
-  modelo: string,
   apiKey: string,
   payload: any,
-  maxReintentos: number = 3,
+  maxReintentos: number = 4,
   delayMs: number = 2000
 ): Promise<{ ok: boolean; status: number; text: string; data?: any }> {
-  let resultado = await ejecutarLlamadaGemini(modelo, apiKey, payload);
+  let resultado = await ejecutarLlamadaGemini(apiKey, payload);
 
   for (let r = 1; r <= maxReintentos; r++) {
     // Si respondió OK o el error NO es 429 ni 503, no reintentamos
@@ -68,50 +65,10 @@ async function llamarConReintentos(
       break;
     }
     await delay(delayMs);
-    resultado = await ejecutarLlamadaGemini(modelo, apiKey, payload);
+    resultado = await ejecutarLlamadaGemini(apiKey, payload);
   }
 
   return resultado;
-}
-
-/**
- * Consulta la lista de modelos de Gemini y devuelve el primer modelo
- * disponible que contenga "flash" y soporte "generateContent"
- */
-async function obtenerPrimerModeloFlashDisponible(apiKey: string): Promise<string | null> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-  try {
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-
-    if (!res.ok) {
-      return null;
-    }
-
-    const data = (await res.json()) as {
-      models?: Array<{ name: string; supportedGenerationMethods?: string[] }>;
-    };
-    const models = data?.models || [];
-
-    // Elegir el primer modelo disponible que contenga "flash" y soporte "generateContent"
-    const match = models.find((m) => {
-      const name = (m.name || '').toLowerCase();
-      const supportsGen = Array.isArray(m.supportedGenerationMethods)
-        ? m.supportedGenerationMethods.includes('generateContent')
-        : false;
-      return name.includes('flash') && supportsGen;
-    });
-
-    if (match) {
-      return match.name.replace(/^models\//, '');
-    }
-  } catch (err) {
-    console.warn('Error listando modelos disponibles de Gemini:', err);
-  }
-  return null;
 }
 
 export const onRequestOptions: PagesFunction = async () => {
@@ -255,19 +212,8 @@ Reglas estrictas de clasificación:
       },
     };
 
-    // 1. Usar gemini-3.8-flash como modelo principal con hasta 3 reintentos esperando 2s ante 503 o 429
-    let geminiResultado = await llamarConReintentos('gemini-3.8-flash', apiKey, payload, 3, 2000);
-
-    // 2. Si después de los reintentos sigue fallando o da 404, consultar la lista de modelos disponibles
-    if (!geminiResultado.ok) {
-      console.warn(`Modelo principal gemini-3.8-flash falló (${geminiResultado.status}). Buscando modelo Flash disponible...`);
-      const modeloFallback = await obtenerPrimerModeloFlashDisponible(apiKey);
-
-      if (modeloFallback && modeloFallback !== 'gemini-3.8-flash') {
-        console.info(`Ejecutando petición con modelo fallback: ${modeloFallback}`);
-        geminiResultado = await llamarConReintentos(modeloFallback, apiKey, payload, 2, 2000);
-      }
-    }
+    // Llamar exclusivamente a gemini-3.8-flash con hasta 4 reintentos esperando 2s ante 503 o 429
+    const geminiResultado = await llamarConReintentos(apiKey, payload, 4, 2000);
 
     if (!geminiResultado.ok) {
       return new Response(
