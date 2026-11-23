@@ -12,9 +12,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-const TIMEOUT_MS = 10000;
+const TIMEOUT_MS = 20000;
 
-interface MovimientoExtracted {
+export interface MovimientoExtracted {
   fecha: string;
   descripcion: string;
   tipo: 'venta' | 'gasto';
@@ -26,29 +26,27 @@ interface MovimientoExtracted {
 }
 
 /**
- * Retorna la fecha actual en Venezuela (UTC-4) en formato YYYY-MM-DD
+ * Retorna la fecha actual en zona horaria Venezuela (UTC-4) en formato YYYY-MM-DD
  */
 function getVenezuelaDate(): string {
-  const now = new Date();
-  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-  const vzlaTime = new Date(utc - (4 * 3600000));
-  const yyyy = vzlaTime.getFullYear();
-  const mm = String(vzlaTime.getMonth() + 1).padStart(2, '0');
-  const dd = String(vzlaTime.getDate()).padStart(2, '0');
+  const vzlaTime = new Date(Date.now() - 4 * 3600 * 1000);
+  const yyyy = vzlaTime.getUTCFullYear();
+  const mm = String(vzlaTime.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(vzlaTime.getUTCDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
 
 /**
  * Parser ultrarrápido en JavaScript puro para extraer movimientos en milisegundos sin consumir cuota
- * Resuelve:
- * 1. Extraer fecha primero y borrarla antes de parsear montos (evita que el año '26' se lea como gasto).
- * 2. Ignorar cualquier línea o bloque que diga "total" para no duplicar ventas.
- * 3. Aceptar montos con o sin unidad después del método de pago, asumiendo Bs si no tiene $ o divisa.
- * 4. Soporta secciones ('Ventas:' vs 'Gastos:') y asigna tipo 'venta' por defecto a métodos de pago.
  */
-function extraerMovimientosLocal(texto: string, fechaReferencia?: string): MovimientoExtracted[] {
+export function extraerMovimientosLocal(
+  texto: string,
+  fechaReferencia?: string,
+  rolUsuario?: string
+): MovimientoExtracted[] {
   const refDate = fechaReferencia || getVenezuelaDate();
   const [refY] = refDate.split('-').map(Number);
+  const esRolVendedor = rolUsuario === 'vendedor';
 
   function resolverFecha(textoSegmento: string, fallback: string): string {
     if (!textoSegmento) return fallback;
@@ -83,8 +81,8 @@ function extraerMovimientosLocal(texto: string, fechaReferencia?: string): Movim
     linea = linea.trim();
     if (!linea) continue;
 
-    // 2. Ignorar cualquier línea completa que diga "total" (ej: "Total: 50,33$" o "Total ventas: 100")
-    if (/^\s*total(?:es)?\b/i.test(linea) && !/\b(ventas?|gastos?|egresos?|ingresos?)\s*[:=-]/i.test(linea)) {
+    // 2. Ignorar cualquier línea completa que contenga la palabra "total" (ej: "Total: 50,33$" o "Total ventas: 100")
+    if (/\btotal(?:es)?\b/i.test(linea) && !/\b(ventas?|gastos?|egresos?|ingresos?)\s*[:=-]/i.test(linea)) {
       continue;
     }
 
@@ -118,7 +116,9 @@ function extraerMovimientosLocal(texto: string, fechaReferencia?: string): Movim
     }
 
     // Si la línea contiene "Ventas: ... Gastos: ..." en la misma línea
-    let partesSeccion: { seccion: 'ventas' | 'gastos' | 'general'; texto: string }[] = [{ seccion: seccionActual, texto: linea }];
+    let partesSeccion: { seccion: 'ventas' | 'gastos' | 'general'; texto: string }[] = [
+      { seccion: seccionActual, texto: linea },
+    ];
     if (/ventas?\s*[:=-]/i.test(linea) || /gastos?\s*[:=-]/i.test(linea) || /egresos?\s*[:=-]/i.test(linea)) {
       partesSeccion = [];
       const tokens = linea.split(/(ventas?\s*[:=-]|gastos?\s*[:=-]|egresos?\s*[:=-])/i);
@@ -173,27 +173,28 @@ function extraerMovimientosLocal(texto: string, fechaReferencia?: string): Movim
         if (isNaN(montoNum) || montoNum <= 0) continue;
         montoNum = Math.abs(montoNum);
 
+        // 4. Normalizar tildes y mayúsculas
         const norm = chunk.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-        // 3. Moneda original: si no tiene "$" ni "divisa", asumir Bolívares (VES)
+        // 3. Moneda original: si no tiene "$", "usd" ni "divisa", asumir Bolívares (VES)
         let moneda: 'VES' | 'USD' = 'VES';
         if (norm.includes('$') || norm.includes('usd') || norm.includes('divisa') || norm.includes('dolar')) {
           moneda = 'USD';
         }
 
-        // Detectar método de pago
+        // 4. Detectar método de pago normalizado
         let metodo: 'pago_movil' | 'punto_venta' | 'efectivo_bs' | 'divisa' = 'efectivo_bs';
         if (moneda === 'USD') {
           metodo = 'divisa';
-        } else if (/\bpm\b|pmovil|p\s*movil|pago\s*movil|transferencia|transf|bcv|banesco|mercantil/.test(norm)) {
+        } else if (/\b(?:pm|pmovil|p\s*movil|pago\s*movil|transferencia|transf|bcv|banesco|mercantil)\b/.test(norm)) {
           metodo = 'pago_movil';
-        } else if (/punto|pos|tarjeta|tdc|debito|biopago/.test(norm)) {
+        } else if (/\b(?:punto|pos|tarjeta|tdc|debito|biopago)\b/.test(norm)) {
           metodo = 'punto_venta';
-        } else if (/efectivo/.test(norm)) {
+        } else if (/\befectivo\b/.test(norm)) {
           metodo = 'efectivo_bs';
         }
 
-        // 4. Palabras explícitas de egreso ("gasto", "compra", "hielo", "insumo", "pago a", "-")
+        // 5. Palabras explícitas de egreso ("gasto", "compra", "hielo", "insumo", "pago a", "-")
         const tienePalabraEgreso =
           /\b(?:gastos?|compras?|hielo|insumos?)\b/.test(norm) ||
           /\bpago\s+a\b/.test(norm) ||
@@ -208,18 +209,16 @@ function extraerMovimientosLocal(texto: string, fechaReferencia?: string): Movim
           /\b(?:nominas?|sueldos?|salarios?)\b/.test(norm) ||
           /\b(?:limpieza|cloro|jabon)\b/.test(norm);
 
-        // 4. Cualquier método de pago es SIEMPRE ingreso positivo (categoria "Ventas") salvo bajo "Gastos:" o con palabra explícita de egreso
+        // Si el body indica rol: 'vendedor', forzarlo SIEMPRE a ingreso (Ventas)
         let esGasto = false;
-        if (secItem === 'gastos') {
+        if (esRolVendedor) {
+          esGasto = false;
+        } else if (secItem === 'gastos') {
           esGasto = true;
         } else if (secItem === 'ventas') {
           esGasto = false;
         } else {
-          if (tienePalabraEgreso) {
-            esGasto = true;
-          } else {
-            esGasto = false;
-          }
+          esGasto = tienePalabraEgreso;
         }
 
         let tipo: 'venta' | 'gasto' = esGasto ? 'gasto' : 'venta';
@@ -243,7 +242,7 @@ function extraerMovimientosLocal(texto: string, fechaReferencia?: string): Movim
           } else if (/\b(?:cashea|krece|cuotas?|prestamos?)\b/.test(norm)) {
             categoria = 'Créditos (Cashea / Krece)';
             naturaleza = 'Créditos / Otros';
-            descripcion = norm.includes('cashea') ? 'Cuota Cashea' : (norm.includes('krece') ? 'Cuota Krece' : 'Cuota Crédito');
+            descripcion = norm.includes('cashea') ? 'Cuota Cashea' : norm.includes('krece') ? 'Cuota Krece' : 'Cuota Crédito';
           } else if (/\b(?:leche|pasta|espagueti|azucar|canela|vainilla|materia\s*prima)\b/.test(norm)) {
             categoria = 'Materia Prima';
             naturaleza = 'Negocio';
@@ -280,7 +279,7 @@ function extraerMovimientosLocal(texto: string, fechaReferencia?: string): Movim
           } else {
             categoria = 'Hielo y Varios Operativos';
             naturaleza = 'Negocio';
-            descripcion = norm.includes('hielo') ? 'Hielo' : (norm.includes('limpieza') ? 'Limpieza' : 'Varios operativos');
+            descripcion = norm.includes('hielo') ? 'Hielo' : norm.includes('limpieza') ? 'Limpieza' : 'Varios operativos';
           }
         }
 
@@ -302,19 +301,25 @@ function extraerMovimientosLocal(texto: string, fechaReferencia?: string): Movim
 }
 
 /**
- * Respaldo: Ejecuta llamada a Gemini 3.8 Flash con AbortSignal.timeout(10000)
+ * Respaldo: Ejecuta llamada a Gemini 3.8 Flash con thinkingBudget: 0 y timeout de 20s
  */
 async function llamarGeminiRespaldo(
   apiKey: string,
-  payload: any
+  payload: any,
+  usarThinkingConfig: boolean = true
 ): Promise<{ ok: boolean; status: number; text: string; data?: any }> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
+
+  const copiaPayload = JSON.parse(JSON.stringify(payload));
+  if (!usarThinkingConfig && copiaPayload?.generationConfig?.thinkingConfig) {
+    delete copiaPayload.generationConfig.thinkingConfig;
+  }
 
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(copiaPayload),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
 
@@ -324,6 +329,12 @@ async function llamarGeminiRespaldo(
     }
 
     const text = await res.text();
+    // Si falla por parámetro 400 y estábamos usando thinkingConfig, reintentar sin thinkingConfig
+    if (res.status === 400 && usarThinkingConfig) {
+      console.warn('Gemini 3.8 Flash rechazó thinkingConfig, reintentando sin él...');
+      return llamarGeminiRespaldo(apiKey, payload, false);
+    }
+
     return { ok: false, status: res.status, text };
   } catch (err: any) {
     const isTimeout = err?.name === 'TimeoutError' || err?.message?.toLowerCase().includes('timeout');
@@ -346,9 +357,10 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   try {
     const { request, env } = context;
 
-    const body = (await request.json()) as { texto?: string; fecha_actual?: string };
+    const body = (await request.json()) as { texto?: string; fecha_actual?: string; rol?: string };
     const texto = body?.texto?.trim();
     const fechaActual = body?.fecha_actual || getVenezuelaDate();
+    const rolUsuario = body?.rol || 'admin';
 
     if (!texto) {
       return new Response(
@@ -357,8 +369,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       );
     }
 
-    // 1. Intentar primero extraer directamente en JavaScript (ultrarrápido en milisegundos)
-    const movimientosLocales = extraerMovimientosLocal(texto, fechaActual);
+    // 1. Intentar primero extraer directamente en JavaScript local (ultrarrápido en milisegundos)
+    const movimientosLocales = extraerMovimientosLocal(texto, fechaActual, rolUsuario);
 
     if (movimientosLocales.length > 0) {
       return new Response(JSON.stringify({ movimientos: movimientosLocales }), {
@@ -380,6 +392,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
     const systemInstruction = `Eres el asistente contable del negocio "Chicha Adictiva". Tu misión es extraer y estructurar cada movimiento de ingresos y egresos.
 La fecha de referencia de hoy es: ${fechaActual}.
+${rolUsuario === 'vendedor' ? 'El usuario es vendedor: TODO movimiento debe ser de tipo "venta", categoría "Ventas" y naturaleza "Negocio".' : ''}
 Clasifica tipo ("venta"|"gasto"), naturaleza ("Negocio"|"Personal"|"Créditos / Otros"), categoría (Ventas si es ingreso, o una de las 9 categorías oficiales de gasto), metodo_pago ("pago_movil"|"punto_venta"|"efectivo_bs"|"divisa"), moneda_original ("VES"|"USD") y monto_original numérico.`;
 
     const payload = {
@@ -388,6 +401,7 @@ Clasifica tipo ("venta"|"gasto"), naturaleza ("Negocio"|"Personal"|"Créditos / 
       generationConfig: {
         responseMimeType: 'application/json',
         temperature: 0.1,
+        thinkingConfig: { thinkingBudget: 0 },
         responseSchema: {
           type: 'OBJECT',
           properties: {
@@ -434,9 +448,9 @@ Clasifica tipo ("venta"|"gasto"), naturaleza ("Negocio"|"Personal"|"Créditos / 
       text: 'No se ejecutó la petición a Gemini.',
     };
 
-    // Recorrer las claves en orden: si una devuelve 429 (cuota agotada), pasa inmediatamente a la siguiente
+    // Recorrer las claves en orden: si una devuelve 429 (cuota agotada), pasa automáticamente a la siguiente clave
     for (const key of apiKeys) {
-      geminiResultado = await llamarGeminiRespaldo(key, payload);
+      geminiResultado = await llamarGeminiRespaldo(key, payload, true);
       if (geminiResultado.ok) {
         break;
       }
@@ -444,7 +458,6 @@ Clasifica tipo ("venta"|"gasto"), naturaleza ("Negocio"|"Personal"|"Créditos / 
         console.warn('Clave de Gemini con cuota agotada (429), pasando a la siguiente clave...');
         continue;
       }
-      // Si no es 429 pero falló, también intentar con la siguiente clave por redundancia
       console.warn(`Clave de Gemini devolvió status ${geminiResultado.status}, probando con la siguiente clave...`);
     }
 

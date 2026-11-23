@@ -18,6 +18,25 @@ export type MetodoPago = 'pago_movil' | 'punto_venta' | 'efectivo_bs' | 'divisa'
 
 export type MonedaOriginal = 'VES' | 'USD';
 
+export interface Puesto {
+  id: string;
+  nombre: string;
+  porcentaje_comision: number;
+  activo: boolean;
+  created_at?: string;
+}
+
+export type RolUsuario = 'admin' | 'vendedor';
+
+export interface PerfilUsuario {
+  id: string;
+  nombre: string;
+  rol: RolUsuario;
+  puesto_id: string | null;
+  puesto?: Puesto | null;
+  created_at?: string;
+}
+
 export interface Movimiento {
   id: string;
   fecha: string; // YYYY-MM-DD
@@ -29,6 +48,9 @@ export interface Movimiento {
   moneda_original: MonedaOriginal;
   monto_original: number;
   tasa_aplicada: number;
+  puesto_id?: string | null;
+  creado_por?: string | null;
+  puesto?: Puesto | null;
   created_at?: string;
 }
 

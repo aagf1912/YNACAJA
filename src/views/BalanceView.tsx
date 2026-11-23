@@ -10,6 +10,7 @@ import {
   TrendingDown,
   PieChart as PieIcon,
   BarChart2,
+  Store,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -27,23 +28,22 @@ import {
 import { toPng } from 'html-to-image';
 import { Share } from '@capacitor/share';
 import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Movimiento, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento } from '../types';
+import { Movimiento, Puesto, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento } from '../types';
 import { calcularMontos, formatNumber, formatPorcentaje, formatUSD, formatVES } from '../utils/format';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
 
 interface Props {
   movimientos: Movimiento[];
+  puestos?: Puesto[];
 }
 
-export const BalanceView: React.FC<Props> = ({ movimientos }) => {
+export const BalanceView: React.FC<Props> = ({ movimientos, puestos = [] }) => {
   const reportRef = useRef<HTMLDivElement>(null);
   const [compartiendo, setCompartiendo] = useState(false);
+  const [filtroPuesto, setFiltroPuesto] = useState<string>('todos');
 
   // Fecha base para la semana (por defecto hoy)
-  const [fechaSemana, setFechaSemana] = useState<Date>(() => {
-    const hoy = new Date();
-    return hoy;
-  });
+  const [fechaSemana, setFechaSemana] = useState<Date>(() => new Date());
 
   // Calcula lunes y domingo de la semana seleccionada
   const { lunes, domingo, diasSemana, rangoTexto } = useMemo(() => {
@@ -72,7 +72,6 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
     const domingoDate = dias[6].dateObj;
     domingoDate.setHours(23, 59, 59, 999);
 
-    // Texto formato: "16 AL 22 NOV 2026"
     const mesLunes = lunesDate.toLocaleString('es-VE', { month: 'short' }).toUpperCase().replace('.', '');
     const mesDomingo = domingoDate.toLocaleString('es-VE', { month: 'short' }).toUpperCase().replace('.', '');
     const anio = domingoDate.getFullYear();
@@ -90,12 +89,25 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
     };
   }, [fechaSemana]);
 
-  // Movimientos dentro de la semana
+  // Todos los movimientos dentro de la semana
   const movimientosSemana = useMemo(() => {
     const fechaInicioStr = diasSemana[0].fechaStr;
     const fechaFinStr = diasSemana[6].fechaStr;
     return movimientos.filter((m) => m.fecha >= fechaInicioStr && m.fecha <= fechaFinStr);
   }, [movimientos, diasSemana]);
+
+  // Movimientos de la semana filtrados por puesto (si está activo un filtro)
+  const movimientosSemanaFiltrados = useMemo(() => {
+    if (filtroPuesto === 'todos') return movimientosSemana;
+    return movimientosSemana.filter((m) => m.puesto_id === filtroPuesto);
+  }, [movimientosSemana, filtroPuesto]);
+
+  // Nombre del puesto actualmente filtrado
+  const nombreFiltroPuesto = useMemo(() => {
+    if (filtroPuesto === 'todos') return 'Todos los puestos';
+    const match = puestos.find((p) => p.id === filtroPuesto);
+    return match ? match.nombre : 'Puesto seleccionado';
+  }, [filtroPuesto, puestos]);
 
   // 1. KPI Totales
   const { totalIngresosUSD, totalGastosUSD, balanceNetoUSD, totalIngresosBs, totalGastosBs, balanceNetoBs } =
@@ -105,7 +117,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
       let ingBs = 0;
       let gasBs = 0;
 
-      for (const m of movimientosSemana) {
+      for (const m of movimientosSemanaFiltrados) {
         const { monto_usd, monto_bs } = calcularMontos(m);
         if (m.tipo === 'venta') {
           ingUSD += monto_usd;
@@ -124,9 +136,76 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
         totalGastosBs: gasBs,
         balanceNetoBs: ingBs - gasBs,
       };
-    }, [movimientosSemana]);
+    }, [movimientosSemanaFiltrados]);
 
-  // 2. Resumen de Ingresos por Método de Pago
+  // 2. Resumen por Puesto de Venta (Ventas, Comisión 22% y Neto)
+  const resumenPorPuesto = useMemo(() => {
+    const items = puestos.map((p) => {
+      const ventasPuesto = movimientosSemana.filter(
+        (m) => m.tipo === 'venta' && m.puesto_id === p.id
+      );
+      let totalUSD = 0;
+      let totalBs = 0;
+
+      for (const v of ventasPuesto) {
+        const { monto_usd, monto_bs } = calcularMontos(v);
+        totalUSD += monto_usd;
+        totalBs += monto_bs;
+      }
+
+      const pct = Number(p.porcentaje_comision) || 22.0;
+      const comisionUSD = (totalUSD * pct) / 100;
+      const netoUSD = totalUSD - comisionUSD;
+
+      return {
+        id: p.id,
+        nombre: p.nombre,
+        porcentaje: pct,
+        ventasCount: ventasPuesto.length,
+        totalUSD,
+        totalBs,
+        comisionUSD,
+        netoUSD,
+      };
+    });
+
+    // Detectar si hay ventas registradas sin puesto
+    const ventasSinPuesto = movimientosSemana.filter(
+      (m) => m.tipo === 'venta' && !m.puesto_id
+    );
+    if (ventasSinPuesto.length > 0) {
+      let totalSinPuestoUSD = 0;
+      let totalSinPuestoBs = 0;
+      for (const v of ventasSinPuesto) {
+        const { monto_usd, monto_bs } = calcularMontos(v);
+        totalSinPuestoUSD += monto_usd;
+        totalSinPuestoBs += monto_bs;
+      }
+      items.push({
+        id: 'sin-puesto',
+        nombre: 'Ventas Generales (Sin puesto)',
+        porcentaje: 0,
+        ventasCount: ventasSinPuesto.length,
+        totalUSD: totalSinPuestoUSD,
+        totalBs: totalSinPuestoBs,
+        comisionUSD: 0,
+        netoUSD: totalSinPuestoUSD,
+      });
+    }
+
+    const totalVentas = items.reduce((acc, i) => acc + i.totalUSD, 0);
+    const totalComision = items.reduce((acc, i) => acc + i.comisionUSD, 0);
+    const totalNeto = items.reduce((acc, i) => acc + i.netoUSD, 0);
+
+    return {
+      items,
+      totalVentas,
+      totalComision,
+      totalNeto,
+    };
+  }, [puestos, movimientosSemana]);
+
+  // 3. Resumen de Ingresos por Método de Pago
   const ingresosPorMetodo = useMemo(() => {
     const metodos = {
       pago_movil: { bs: 0, usd: 0 },
@@ -135,7 +214,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
       divisa: { bs: 0, usd: 0 },
     };
 
-    for (const m of movimientosSemana) {
+    for (const m of movimientosSemanaFiltrados) {
       if (m.tipo === 'venta') {
         const { monto_usd, monto_bs } = calcularMontos(m);
         if (metodos[m.metodo_pago]) {
@@ -146,12 +225,12 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
     }
 
     return metodos;
-  }, [movimientosSemana]);
+  }, [movimientosSemanaFiltrados]);
 
-  // 3. Tabla 1: Detalle Diario (7 filas Lunes a Domingo)
+  // 4. Detalle Diario (7 filas Lunes a Domingo)
   const detalleDiario = useMemo(() => {
     return diasSemana.map((d) => {
-      const movsDia = movimientosSemana.filter((m) => m.fecha === d.fechaStr);
+      const movsDia = movimientosSemanaFiltrados.filter((m) => m.fecha === d.fechaStr);
       let ingBs = 0;
       let ingUSD = 0;
       let gasBs = 0;
@@ -179,9 +258,9 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
         balanceUSD: ingUSD - gasUSD,
       };
     });
-  }, [diasSemana, movimientosSemana]);
+  }, [diasSemana, movimientosSemanaFiltrados]);
 
-  // 4. Tabla 2: Resumen de Gastos por Categoría y Naturaleza
+  // 5. Resumen de Gastos por Categoría y Naturaleza
   const resumenCategorias = useMemo(() => {
     const mapa: Record<
       string,
@@ -197,7 +276,6 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
       }
     > = {};
 
-    // Inicializar las 9 categorías
     for (const cat of CATEGORIAS_GASTO) {
       mapa[cat.nombre] = {
         categoria: cat.nombre,
@@ -211,7 +289,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
       };
     }
 
-    for (const m of movimientosSemana) {
+    for (const m of movimientosSemanaFiltrados) {
       if (m.tipo === 'gasto') {
         const { monto_usd, monto_bs } = calcularMontos(m);
         if (!mapa[m.categoria]) {
@@ -237,30 +315,26 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
         } else if (m.metodo_pago === 'efectivo_bs') {
           reg.efectivoBs += monto_bs;
         } else {
-          // punto_venta o divisa
           reg.puntoDivisaBs += monto_bs;
         }
       }
     }
 
-    // Ordenar de mayor a menor totalUSD
-    const lista = Object.values(mapa).sort((a, b) => b.totalUSD - a.totalUSD);
-
-    return lista;
-  }, [movimientosSemana]);
+    return Object.values(mapa).sort((a, b) => b.totalUSD - a.totalUSD);
+  }, [movimientosSemanaFiltrados]);
 
   const totalGastosItemsCount = useMemo(() => {
     return resumenCategorias.reduce((acc, c) => acc + c.itemsCount, 0);
   }, [resumenCategorias]);
 
-  // 5. Tabla 3: Desglose por Naturaleza del Gasto (Operativo vs Personal)
+  // 6. Desglose por Naturaleza del Gasto (Operativo vs Personal)
   const desgloseNaturaleza = useMemo(() => {
     const tipos: NaturalezaMovimiento[] = ['Negocio', 'Créditos / Otros', 'Personal'];
     return tipos.map((nat) => {
       let bs = 0;
       let usd = 0;
 
-      for (const m of movimientosSemana) {
+      for (const m of movimientosSemanaFiltrados) {
         if (m.tipo === 'gasto' && m.naturaleza === nat) {
           const { monto_usd, monto_bs } = calcularMontos(m);
           bs += monto_bs;
@@ -279,12 +353,12 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
         impactoIngresos,
       };
     });
-  }, [movimientosSemana, totalGastosUSD, totalIngresosUSD]);
+  }, [movimientosSemanaFiltrados, totalGastosUSD, totalIngresosUSD]);
 
-  // 6. Datos Gráficos
+  // 7. Datos Gráficos
   const datosGraficoBarras = useMemo(() => {
     return detalleDiario.map((d) => ({
-      dia: d.dia.slice(0, 3), // Lun, Mar, Mié...
+      dia: d.dia.slice(0, 3),
       Ingresos: parseFloat(d.ingresosUSD.toFixed(2)),
       Gastos: parseFloat(d.gastosUSD.toFixed(2)),
     }));
@@ -332,14 +406,23 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
   const exportarCSV = () => {
     const BOM = '\uFEFF';
     let csv = `${BOM}"BALANCE SEMANAL COMPLETO — CHICHA ADICTIVA"\n`;
-    csv += `"Período:","${rangoTexto}"\n\n`;
+    csv += `"Período:","${rangoTexto}"\n`;
+    csv += `"Filtro Puesto:","${nombreFiltroPuesto}"\n\n`;
 
     // Resumen KPI
     csv += `"TOTAL INGRESOS ($)","${totalIngresosUSD.toFixed(2)}","Bs","${totalIngresosBs.toFixed(2)}"\n`;
     csv += `"TOTAL GASTOS ($)","${totalGastosUSD.toFixed(2)}","Bs","${totalGastosBs.toFixed(2)}"\n`;
     csv += `"BALANCE NETO ($)","${balanceNetoUSD.toFixed(2)}","Bs","${balanceNetoBs.toFixed(2)}"\n\n`;
 
-    // Tabla 1: Detalle Diario
+    // Resumen por Puesto
+    csv += `"RESUMEN POR PUESTO DE VENTA (VENTAS Y COMISIONES)"\n`;
+    csv += `"Puesto","Cant. Ventas","Total Ventas ($)","Comisión Vendedores ($)","Neto Negocio ($)"\n`;
+    for (const p of resumenPorPuesto.items) {
+      csv += `"${p.nombre}","${p.ventasCount}","${p.totalUSD.toFixed(2)}","(${p.comisionUSD.toFixed(2)})","${p.netoUSD.toFixed(2)}"\n`;
+    }
+    csv += `"TOTAL PUESTOS","${resumenPorPuesto.items.reduce((a, b) => a + b.ventasCount, 0)}","${resumenPorPuesto.totalVentas.toFixed(2)}","(${resumenPorPuesto.totalComision.toFixed(2)})","${resumenPorPuesto.totalNeto.toFixed(2)}"\n\n`;
+
+    // Tabla: Detalle Diario
     csv += `"DETALLE DIARIO (LUNES A DOMINGO)"\n`;
     csv += `"Fecha","Día","Ingresos (Bs)","Ingresos ($)","Gastos (Bs)","Gastos ($)","Balance Día (Bs)","Balance Día ($)"\n`;
     for (const d of detalleDiario) {
@@ -347,7 +430,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
     }
     csv += `"TOTAL SEMANA","7 días","${totalIngresosBs.toFixed(2)}","${totalIngresosUSD.toFixed(2)}","${totalGastosBs.toFixed(2)}","${totalGastosUSD.toFixed(2)}","${balanceNetoBs.toFixed(2)}","${balanceNetoUSD.toFixed(2)}"\n\n`;
 
-    // Tabla 2: Resumen de Gastos por Categoría
+    // Tabla: Resumen de Gastos por Categoría
     csv += `"RESUMEN DE GASTOS POR CATEGORÍA Y NATURALEZA"\n`;
     csv += `"Categoría","Naturaleza","Pago Móvil (Bs)","Efectivo (Bs)","Punto / Divisa (Bs)","Total (Bs)","Total ($)","% del Gasto"\n`;
     for (const c of resumenCategorias) {
@@ -356,7 +439,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
     }
     csv += `"TOTAL GASTOS","${totalGastosItemsCount} items","","","","${totalGastosBs.toFixed(2)}","${totalGastosUSD.toFixed(2)}","100.0%"\n\n`;
 
-    // Tabla 3: Desglose por Naturaleza
+    // Tabla: Desglose por Naturaleza
     csv += `"DESGLOSE POR NATURALEZA DEL GASTO (OPERATIVO VS PERSONAL)"\n`;
     csv += `"Naturaleza","Total (Bs)","Total ($)","% del Gasto","Impacto sobre Ingresos"\n`;
     for (const n of desgloseNaturaleza) {
@@ -388,7 +471,6 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
 
       const fileName = `Balance_ChichaAdictiva_${diasSemana[0].fechaStr}.png`;
 
-      // Si está en Capacitor Android
       try {
         const savedFile = await Filesystem.writeFile({
           path: fileName,
@@ -398,23 +480,22 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
 
         await Share.share({
           title: 'Balance Semanal - Chicha Adictiva',
-          text: `Balance semanal del ${rangoTexto} — Chicha Adictiva`,
+          text: `Balance semanal del ${rangoTexto} (${nombreFiltroPuesto}) — Chicha Adictiva`,
           url: savedFile.uri,
           dialogTitle: 'Compartir Balance Semanal',
         });
         setCompartiendo(false);
         return;
       } catch {
-        // En entorno Web o si Capacitor Share falla
+        // Fallback web
       }
 
-      // Fallback a descarga de imagen tradicional
       const link = document.createElement('a');
       link.download = fileName;
       link.href = dataUrl;
       link.click();
     } catch (err) {
-      console.error('Error generando o compartiendo imagen:', err);
+      console.error('Error generando imagen:', err);
       alert('No se pudo generar la imagen del reporte.');
     } finally {
       setCompartiendo(false);
@@ -423,7 +504,42 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
 
   return (
     <div className="space-y-4 pb-24 pt-2 px-3 sm:px-4 max-w-4xl mx-auto">
-      {/* Barra de Período Semanal */}
+      {/* 1. SELECTOR DE FILTRO POR PUESTO */}
+      {puestos.length > 0 && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+          <span className="text-[11px] font-bold text-[#52525B] flex items-center gap-1 shrink-0">
+            <Store size={13} className="text-[#2C474E]" />
+            Ver puesto:
+          </span>
+          <button
+            type="button"
+            onClick={() => setFiltroPuesto('todos')}
+            className={`px-3 py-1 text-xs rounded-full font-bold transition-colors shrink-0 ${
+              filtroPuesto === 'todos'
+                ? 'bg-[#2C474E] text-white shadow-xs'
+                : 'bg-white border border-[#E4E4E7] text-[#52525B] hover:bg-zinc-100'
+            }`}
+          >
+            Todos los puestos (Consolidado)
+          </button>
+          {puestos.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => setFiltroPuesto(p.id)}
+              className={`px-3 py-1 text-xs rounded-full font-bold transition-colors shrink-0 ${
+                filtroPuesto === p.id
+                  ? 'bg-[#2C474E] text-white shadow-xs'
+                  : 'bg-white border border-[#E4E4E7] text-[#52525B] hover:bg-zinc-100'
+              }`}
+            >
+              {p.nombre}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 2. Barra de Período Semanal */}
       <div className="bg-white border border-[#E4E4E7] rounded-lg p-2.5 flex items-center justify-between shadow-xs">
         <button
           type="button"
@@ -451,7 +567,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
         </button>
       </div>
 
-      {/* Botones de Acción: Exportar Excel y Compartir Imagen */}
+      {/* 3. Botones de Acción: Exportar Excel y Compartir Imagen */}
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -479,15 +595,15 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
         <div className="bg-[#2C474E] text-white px-4 py-2.5 rounded-lg flex items-center justify-between shadow-xs">
           <div className="flex flex-col">
             <span className="text-xs sm:text-sm font-bold uppercase tracking-wider">
-              BALANCE SEMANAL COMPLETO — CHICHA ADICTIVA
+              BALANCE SEMANAL — CHICHA ADICTIVA
             </span>
             <span className="text-[11px] text-[#86EFAC] font-medium uppercase tracking-wide tabular-nums">
-              {rangoTexto}
+              {rangoTexto} • {nombreFiltroPuesto}
             </span>
           </div>
         </div>
 
-        {/* 1. 3 TARJETAS KPI EN FILA */}
+        {/* 1. TARJETAS KPI EN FILA */}
         <div className="grid grid-cols-3 gap-2">
           {/* TOTAL INGRESOS */}
           <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-lg p-2.5 text-center shadow-xs">
@@ -516,8 +632,14 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
           </div>
 
           {/* BALANCE NETO */}
-          <div className="bg-[#FEFCE8] border border-[#FEF08A] rounded-lg p-2.5 text-center shadow-xs">
-            <span className="block text-[10px] sm:text-xs font-bold text-[#18181B] uppercase tracking-wider mb-1">
+          <div
+            className={`rounded-lg p-2.5 text-center shadow-xs border ${
+              balanceNetoUSD >= 0
+                ? 'bg-[#F0FDF4] border-[#86EFAC]'
+                : 'bg-[#FFF1F2] border-[#FDA4AF]'
+            }`}
+          >
+            <span className="block text-[10px] sm:text-xs font-bold uppercase tracking-wider mb-1 text-[#18181B]">
               BALANCE NETO ($)
             </span>
             <span
@@ -528,122 +650,177 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
               {balanceNetoUSD >= 0 ? '+' : ''}
               {formatUSD(balanceNetoUSD)}
             </span>
-            <span className="block text-[10px] text-[#18181B] opacity-80 tabular-nums font-medium mt-0.5">
+            <span className="block text-[10px] text-[#52525B] tabular-nums font-medium mt-0.5">
+              {balanceNetoBs >= 0 ? '+' : ''}
               {formatVES(balanceNetoBs)}
             </span>
           </div>
         </div>
 
-        {/* 2. RESUMEN COMPACTO DE INGRESOS POR MÉTODO DE PAGO */}
+        {/* 2. BLOQUE DESTACADO: RESUMEN POR PUESTO DE VENTA (VENTAS Y COMISIÓN 22%) */}
         <div className="bg-white border border-[#E4E4E7] rounded-lg overflow-hidden shadow-xs">
-          <div className="bg-[#2C474E] text-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider">
-            Ingresos de la Semana por Método de Pago
+          <div className="bg-[#2C474E] text-white px-3.5 py-2 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Store size={15} className="text-[#86EFAC]" />
+              <span className="text-xs font-bold uppercase tracking-wider">
+                Resumen por Puesto de Venta (Comisión Vendedores)
+              </span>
+            </div>
+            <span className="text-[11px] text-[#86EFAC] font-mono">
+              Período Seleccionado
+            </span>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-[#E4E4E7] p-2">
-            {/* Pago Móvil */}
-            <div className="p-2 text-center">
-              <span className="block text-[11px] text-[#52525B] font-semibold mb-0.5">
-                Pago Móvil
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+              <thead>
+                <tr className="bg-[#FAFAFA] border-b border-[#E4E4E7] text-[#52525B] font-bold">
+                  <th className="py-2 px-3">Puesto de Venta</th>
+                  <th className="py-2 px-2.5 text-center">Cant.</th>
+                  <th className="py-2 px-3 text-right">Total Ventas ($)</th>
+                  <th className="py-2 px-3 text-right text-[#047857]">Comisión Vendedores ($)</th>
+                  <th className="py-2 px-3 text-right text-[#166534]">Neto Negocio ($)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E4E4E7]">
+                {resumenPorPuesto.items.map((p) => (
+                  <tr key={p.id} className="hover:bg-zinc-50 transition-colors">
+                    <td className="py-2.5 px-3 font-bold text-[#18181B]">
+                      {p.nombre}
+                      {p.porcentaje > 0 && (
+                        <span className="ml-1.5 text-[10px] text-zinc-500 font-mono font-normal">
+                          ({p.porcentaje}%)
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-2.5 text-center tabular-nums text-zinc-500">
+                      {p.ventasCount}
+                    </td>
+                    <td className="py-2.5 px-3 text-right tabular-nums font-bold text-[#18181B]">
+                      {formatUSD(p.totalUSD)}
+                    </td>
+                    <td className="py-2.5 px-3 text-right tabular-nums font-bold text-[#047857] font-mono">
+                      ({formatUSD(p.comisionUSD)})
+                    </td>
+                    <td className="py-2.5 px-3 text-right tabular-nums font-black text-[#166534]">
+                      {formatUSD(p.netoUSD)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-zinc-100 font-bold border-t-2 border-[#2C474E] text-[#18181B]">
+                  <td className="py-2.5 px-3">TOTAL PUESTOS</td>
+                  <td className="py-2.5 px-2.5 text-center tabular-nums">
+                    {resumenPorPuesto.items.reduce((acc, i) => acc + i.ventasCount, 0)}
+                  </td>
+                  <td className="py-2.5 px-3 text-right tabular-nums text-[#18181B]">
+                    {formatUSD(resumenPorPuesto.totalVentas)}
+                  </td>
+                  <td className="py-2.5 px-3 text-right tabular-nums text-[#047857] font-mono">
+                    ({formatUSD(resumenPorPuesto.totalComision)})
+                  </td>
+                  <td className="py-2.5 px-3 text-right tabular-nums text-[#166534]">
+                    {formatUSD(resumenPorPuesto.totalNeto)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+
+        {/* 3. RESUMEN DE INGRESOS POR MÉTODO DE PAGO */}
+        <div className="bg-white border border-[#E4E4E7] rounded-lg p-3 shadow-xs">
+          <span className="block text-xs font-bold text-[#18181B] uppercase tracking-wider mb-2 pb-1 border-b border-[#E4E4E7]">
+            Ventas por Método de Pago
+          </span>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="p-2 border border-[#E4E4E7] rounded bg-[#FAFAFA]">
+              <span className="block text-[11px] font-semibold text-[#52525B]">Pago Móvil</span>
+              <span className="block text-xs sm:text-sm font-bold text-[#166534] tabular-nums mt-0.5">
+                {formatUSD(ingresosPorMetodo.pago_movil.usd)}
               </span>
-              <span className="block text-xs font-bold text-[#18181B] tabular-nums">
-                {formatNumber(ingresosPorMetodo.pago_movil.bs)} Bs
-              </span>
-              <span className="block text-[10px] text-[#52525B] tabular-nums">
-                ({formatUSD(ingresosPorMetodo.pago_movil.usd)})
+              <span className="block text-[10px] text-zinc-400 tabular-nums">
+                {formatVES(ingresosPorMetodo.pago_movil.bs)}
               </span>
             </div>
-
-            {/* Punto de Venta */}
-            <div className="p-2 text-center">
-              <span className="block text-[11px] text-[#52525B] font-semibold mb-0.5">
-                Punto de Venta
+            <div className="p-2 border border-[#E4E4E7] rounded bg-[#FAFAFA]">
+              <span className="block text-[11px] font-semibold text-[#52525B]">Punto de Venta</span>
+              <span className="block text-xs sm:text-sm font-bold text-[#166534] tabular-nums mt-0.5">
+                {formatUSD(ingresosPorMetodo.punto_venta.usd)}
               </span>
-              <span className="block text-xs font-bold text-[#18181B] tabular-nums">
-                {formatNumber(ingresosPorMetodo.punto_venta.bs)} Bs
-              </span>
-              <span className="block text-[10px] text-[#52525B] tabular-nums">
-                ({formatUSD(ingresosPorMetodo.punto_venta.usd)})
+              <span className="block text-[10px] text-zinc-400 tabular-nums">
+                {formatVES(ingresosPorMetodo.punto_venta.bs)}
               </span>
             </div>
-
-            {/* Efectivo Bs */}
-            <div className="p-2 text-center">
-              <span className="block text-[11px] text-[#52525B] font-semibold mb-0.5">
-                Efectivo (Bs)
+            <div className="p-2 border border-[#E4E4E7] rounded bg-[#FAFAFA]">
+              <span className="block text-[11px] font-semibold text-[#52525B]">Efectivo Bs</span>
+              <span className="block text-xs sm:text-sm font-bold text-[#166534] tabular-nums mt-0.5">
+                {formatUSD(ingresosPorMetodo.efectivo_bs.usd)}
               </span>
-              <span className="block text-xs font-bold text-[#18181B] tabular-nums">
-                {formatNumber(ingresosPorMetodo.efectivo_bs.bs)} Bs
-              </span>
-              <span className="block text-[10px] text-[#52525B] tabular-nums">
-                ({formatUSD(ingresosPorMetodo.efectivo_bs.usd)})
+              <span className="block text-[10px] text-zinc-400 tabular-nums">
+                {formatVES(ingresosPorMetodo.efectivo_bs.bs)}
               </span>
             </div>
-
-            {/* Divisa ($) */}
-            <div className="p-2 text-center">
-              <span className="block text-[11px] text-[#52525B] font-semibold mb-0.5">
-                Divisa ($)
-              </span>
-              <span className="block text-xs font-bold text-[#166534] tabular-nums">
+            <div className="p-2 border border-[#E4E4E7] rounded bg-[#FAFAFA]">
+              <span className="block text-[11px] font-semibold text-[#52525B]">Divisa ($)</span>
+              <span className="block text-xs sm:text-sm font-bold text-[#166534] tabular-nums mt-0.5">
                 {formatUSD(ingresosPorMetodo.divisa.usd)}
               </span>
-              <span className="block text-[10px] text-[#52525B] tabular-nums">
-                ({formatNumber(ingresosPorMetodo.divisa.bs)} Bs)
+              <span className="block text-[10px] text-zinc-400 tabular-nums">
+                {formatVES(ingresosPorMetodo.divisa.bs)}
               </span>
             </div>
           </div>
         </div>
 
-        {/* 3. TABLA 1 — DETALLE DIARIO (Lunes a Domingo) */}
+        {/* 4. TABLA DETALLE DIARIO (Lunes a Domingo) */}
         <div className="bg-white border border-[#E4E4E7] rounded-lg overflow-hidden shadow-xs">
-          <div className="bg-[#2C474E] text-white px-3 py-2 text-xs font-bold uppercase tracking-wider">
-            Detalle Diario (Lunes a Domingo)
+          <div className="bg-[#2C474E] text-white px-3.5 py-2 flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider">
+              Detalle Diario (Lunes a Domingo)
+            </span>
+            <span className="text-[11px] text-[#86EFAC] font-mono">7 Días</span>
           </div>
+
           <div className="overflow-x-auto">
-            <table className="w-full text-[11px] text-left border-collapse">
+            <table className="w-full text-xs text-left">
               <thead>
-                <tr className="bg-[#2C474E] text-white border-b border-[#3d5e67]">
-                  <th className="py-2 px-2.5 font-bold sticky left-0 bg-[#2C474E] z-10">Fecha</th>
-                  <th className="py-2 px-2.5 font-bold">Día</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Ingresos (Bs)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Ingresos ($)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Gastos (Bs)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Gastos ($)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Balance Día (Bs)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Balance Día ($)</th>
+                <tr className="bg-[#FAFAFA] border-b border-[#E4E4E7] text-[#52525B] font-bold">
+                  <th className="py-2 px-2.5 sticky left-0 bg-[#FAFAFA] z-10 border-r border-[#E4E4E7]">
+                    Día
+                  </th>
+                  <th className="py-2 px-2 text-right">Ingresos (Bs)</th>
+                  <th className="py-2 px-2 text-right text-[#166534]">Ingresos ($)</th>
+                  <th className="py-2 px-2 text-right">Gastos (Bs)</th>
+                  <th className="py-2 px-2 text-right text-[#991B1B]">Gastos ($)</th>
+                  <th className="py-2 px-2.5 text-right font-black">Balance ($)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E4E4E7]">
                 {detalleDiario.map((d) => (
-                  <tr key={d.fecha} className="hover:bg-zinc-50">
-                    <td className="py-2 px-2.5 font-medium tabular-nums sticky left-0 bg-white z-10 border-r border-[#E4E4E7]">
-                      {d.fecha}
+                  <tr key={d.fecha} className="hover:bg-zinc-50 transition-colors">
+                    <td className="py-2 px-2.5 font-bold sticky left-0 bg-white z-10 border-r border-[#E4E4E7] whitespace-nowrap">
+                      {d.dia} <span className="text-[10px] font-normal text-zinc-400">({d.fecha.slice(5)})</span>
                     </td>
-                    <td className="py-2 px-2.5 font-medium text-[#18181B]">{d.dia}</td>
-                    <td className="py-2 px-2.5 text-right tabular-nums text-[#166534]">
+                    <td className="py-2 px-2 text-right tabular-nums text-zinc-600">
                       {formatNumber(d.ingresosBs)}
                     </td>
-                    <td className="py-2 px-2.5 text-right tabular-nums font-semibold text-[#166534]">
+                    <td className="py-2 px-2 text-right tabular-nums font-bold text-[#166534]">
                       {formatUSD(d.ingresosUSD)}
                     </td>
-                    <td className="py-2 px-2.5 text-right tabular-nums text-[#991B1B]">
+                    <td className="py-2 px-2 text-right tabular-nums text-zinc-600">
                       {formatNumber(d.gastosBs)}
                     </td>
-                    <td className="py-2 px-2.5 text-right tabular-nums font-semibold text-[#991B1B]">
+                    <td className="py-2 px-2 text-right tabular-nums font-bold text-[#991B1B]">
                       {formatUSD(d.gastosUSD)}
-                    </td>
-                    <td
-                      className={`py-2 px-2.5 text-right tabular-nums font-semibold ${
-                        d.balanceBs >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
-                      }`}
-                    >
-                      {formatNumber(d.balanceBs)}
                     </td>
                     <td
                       className={`py-2 px-2.5 text-right tabular-nums font-bold ${
                         d.balanceUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
                       }`}
                     >
+                      {d.balanceUSD >= 0 ? '+' : ''}
                       {formatUSD(d.balanceUSD)}
                     </td>
                   </tr>
@@ -652,33 +829,22 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
               <tfoot>
                 <tr className="bg-zinc-100 font-bold border-t-2 border-[#2C474E] text-[#18181B]">
                   <td className="py-2.5 px-2.5 sticky left-0 bg-zinc-100 z-10 border-r border-[#E4E4E7]">
-                    TOTAL SEMANA
+                    TOTAL
                   </td>
-                  <td className="py-2.5 px-2.5">7 días</td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums text-[#166534]">
-                    {formatNumber(totalIngresosBs)}
-                  </td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums text-[#166534]">
+                  <td className="py-2.5 px-2 text-right tabular-nums">{formatNumber(totalIngresosBs)}</td>
+                  <td className="py-2.5 px-2 text-right tabular-nums text-[#166534]">
                     {formatUSD(totalIngresosUSD)}
                   </td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums text-[#991B1B]">
-                    {formatNumber(totalGastosBs)}
-                  </td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums text-[#991B1B]">
+                  <td className="py-2.5 px-2 text-right tabular-nums">{formatNumber(totalGastosBs)}</td>
+                  <td className="py-2.5 px-2 text-right tabular-nums text-[#991B1B]">
                     {formatUSD(totalGastosUSD)}
                   </td>
                   <td
-                    className={`py-2.5 px-2.5 text-right tabular-nums ${
-                      balanceNetoBs >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
-                    }`}
-                  >
-                    {formatNumber(balanceNetoBs)}
-                  </td>
-                  <td
-                    className={`py-2.5 px-2.5 text-right tabular-nums ${
+                    className={`py-2.5 px-2.5 text-right tabular-nums font-black ${
                       balanceNetoUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
                     }`}
                   >
+                    {balanceNetoUSD >= 0 ? '+' : ''}
                     {formatUSD(balanceNetoUSD)}
                   </td>
                 </tr>
@@ -687,52 +853,56 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
           </div>
         </div>
 
-        {/* 4. TABLA 2 — RESUMEN DE GASTOS POR CATEGORÍA Y NATURALEZA */}
+        {/* 5. TABLA RESUMEN DE GASTOS POR CATEGORÍA Y NATURALEZA */}
         <div className="bg-white border border-[#E4E4E7] rounded-lg overflow-hidden shadow-xs">
-          <div className="bg-[#2C474E] text-white px-3 py-2 text-xs font-bold uppercase tracking-wider">
-            Resumen de Gastos por Categoría y Naturaleza
+          <div className="bg-[#2C474E] text-white px-3.5 py-2 flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider">
+              Gastos por Categoría y Naturaleza
+            </span>
+            <span className="text-[11px] text-[#86EFAC] font-mono">
+              Total: {formatUSD(totalGastosUSD)}
+            </span>
           </div>
+
           <div className="overflow-x-auto">
-            <table className="w-full text-[11px] text-left border-collapse">
+            <table className="w-full text-xs text-left">
               <thead>
-                <tr className="bg-[#2C474E] text-white border-b border-[#3d5e67]">
-                  <th className="py-2 px-2.5 font-bold sticky left-0 bg-[#2C474E] z-10">Categoría de Gasto</th>
-                  <th className="py-2 px-2.5 font-bold">Naturaleza</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Pago Móvil (Bs)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Efectivo (Bs)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Punto / Divisa (Bs)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Total (Bs)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Total ($)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">% del Gasto</th>
+                <tr className="bg-[#FAFAFA] border-b border-[#E4E4E7] text-[#52525B] font-bold">
+                  <th className="py-2 px-2.5 sticky left-0 bg-[#FAFAFA] z-10 border-r border-[#E4E4E7]">
+                    Categoría
+                  </th>
+                  <th className="py-2 px-2 text-center">Naturaleza</th>
+                  <th className="py-2 px-2 text-right">Pago Móvil</th>
+                  <th className="py-2 px-2 text-right">Efectivo</th>
+                  <th className="py-2 px-2 text-right">Total Bs</th>
+                  <th className="py-2 px-2.5 text-right text-[#991B1B]">Total ($)</th>
+                  <th className="py-2 px-2 text-right">% Gasto</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E4E4E7]">
                 {resumenCategorias.map((c) => {
                   const pct = totalGastosUSD > 0 ? (c.totalUSD / totalGastosUSD) * 100 : 0;
                   return (
-                    <tr key={c.categoria} className="hover:bg-zinc-50">
-                      <td className="py-2 px-2.5 font-semibold text-[#18181B] sticky left-0 bg-white z-10 border-r border-[#E4E4E7]">
+                    <tr key={c.categoria} className="hover:bg-zinc-50 transition-colors">
+                      <td className="py-2 px-2.5 font-bold text-[#18181B] sticky left-0 bg-white z-10 border-r border-[#E4E4E7] whitespace-nowrap">
                         {c.categoria}
                       </td>
-                      <td className="py-2 px-2.5">
-                        <BadgeNaturaleza naturaleza={c.naturaleza} />
+                      <td className="py-2 px-2 text-center">
+                        <BadgeNaturaleza naturaleza={c.naturaleza} tipo="gasto" />
                       </td>
-                      <td className="py-2 px-2.5 text-right tabular-nums text-[#52525B]">
+                      <td className="py-2 px-2 text-right tabular-nums text-zinc-600">
                         {formatNumber(c.pagoMovilBs)}
                       </td>
-                      <td className="py-2 px-2.5 text-right tabular-nums text-[#52525B]">
+                      <td className="py-2 px-2 text-right tabular-nums text-zinc-600">
                         {formatNumber(c.efectivoBs)}
                       </td>
-                      <td className="py-2 px-2.5 text-right tabular-nums text-[#52525B]">
-                        {formatNumber(c.puntoDivisaBs)}
-                      </td>
-                      <td className="py-2 px-2.5 text-right tabular-nums font-semibold text-[#18181B]">
+                      <td className="py-2 px-2 text-right tabular-nums font-semibold text-[#18181B]">
                         {formatNumber(c.totalBs)}
                       </td>
                       <td className="py-2 px-2.5 text-right tabular-nums font-bold text-[#991B1B]">
                         {formatUSD(c.totalUSD)}
                       </td>
-                      <td className="py-2 px-2.5 text-right tabular-nums font-semibold text-[#52525B]">
+                      <td className="py-2 px-2 text-right tabular-nums text-zinc-500 font-medium">
                         {formatPorcentaje(pct)}
                       </td>
                     </tr>
@@ -744,56 +914,54 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
                   <td className="py-2.5 px-2.5 sticky left-0 bg-zinc-100 z-10 border-r border-[#E4E4E7]">
                     TOTAL GASTOS
                   </td>
-                  <td className="py-2.5 px-2.5 text-[10px] text-[#52525B]">
+                  <td className="py-2.5 px-2 text-center text-[10px] text-zinc-500">
                     {totalGastosItemsCount} items
                   </td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums">
+                  <td className="py-2.5 px-2 text-right tabular-nums">
                     {formatNumber(resumenCategorias.reduce((a, b) => a + b.pagoMovilBs, 0))}
                   </td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums">
+                  <td className="py-2.5 px-2 text-right tabular-nums">
                     {formatNumber(resumenCategorias.reduce((a, b) => a + b.efectivoBs, 0))}
                   </td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums">
-                    {formatNumber(resumenCategorias.reduce((a, b) => a + b.puntoDivisaBs, 0))}
-                  </td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums text-[#18181B]">
-                    {formatNumber(totalGastosBs)}
-                  </td>
+                  <td className="py-2.5 px-2 text-right tabular-nums">{formatNumber(totalGastosBs)}</td>
                   <td className="py-2.5 px-2.5 text-right tabular-nums text-[#991B1B]">
                     {formatUSD(totalGastosUSD)}
                   </td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums">100.0%</td>
+                  <td className="py-2.5 px-2 text-right tabular-nums">100.0%</td>
                 </tr>
               </tfoot>
             </table>
           </div>
         </div>
 
-        {/* 5. TABLA 3 — DESGLOSE POR NATURALEZA DEL GASTO (OPERATIVO VS PERSONAL) */}
+        {/* 6. TABLA DESGLOSE POR NATURALEZA (Negocio, Créditos, Personal) */}
         <div className="bg-white border border-[#E4E4E7] rounded-lg overflow-hidden shadow-xs">
-          <div className="bg-[#2C474E] text-white px-3 py-2 text-xs font-bold uppercase tracking-wider">
-            Desglose por Naturaleza del Gasto (Operativo vs Personal)
+          <div className="bg-[#2C474E] text-white px-3.5 py-2 flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider">
+              Desglose por Naturaleza (Operativo vs Personal)
+            </span>
           </div>
+
           <div className="overflow-x-auto">
-            <table className="w-full text-[11px] text-left border-collapse">
+            <table className="w-full text-xs text-left">
               <thead>
-                <tr className="bg-[#2C474E] text-white border-b border-[#3d5e67]">
-                  <th className="py-2 px-2.5 font-bold sticky left-0 bg-[#2C474E] z-10">Naturaleza</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Total (Bs)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">Total ($)</th>
-                  <th className="py-2 px-2.5 font-bold text-right">% del Gasto</th>
-                  <th className="py-2 px-2.5 font-bold text-right">
-                    Impacto sobre Ingresos ({formatUSD(totalIngresosUSD)})
+                <tr className="bg-[#FAFAFA] border-b border-[#E4E4E7] text-[#52525B] font-bold">
+                  <th className="py-2 px-2.5 sticky left-0 bg-[#FAFAFA] z-10 border-r border-[#E4E4E7]">
+                    Naturaleza
                   </th>
+                  <th className="py-2 px-2.5 text-right">Total (Bs)</th>
+                  <th className="py-2 px-2.5 text-right text-[#991B1B]">Total ($)</th>
+                  <th className="py-2 px-2.5 text-right">% Gasto</th>
+                  <th className="py-2 px-2.5 text-right">Impacto s/ Ventas</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E4E4E7]">
                 {desgloseNaturaleza.map((n) => (
-                  <tr key={n.naturaleza} className="hover:bg-zinc-50">
-                    <td className="py-2 px-2.5 font-semibold text-[#18181B] sticky left-0 bg-white z-10 border-r border-[#E4E4E7]">
-                      <BadgeNaturaleza naturaleza={n.naturaleza} />
+                  <tr key={n.naturaleza} className="hover:bg-zinc-50 transition-colors">
+                    <td className="py-2 px-2.5 font-bold sticky left-0 bg-white z-10 border-r border-[#E4E4E7]">
+                      <BadgeNaturaleza naturaleza={n.naturaleza} tipo="gasto" />
                     </td>
-                    <td className="py-2 px-2.5 text-right tabular-nums text-[#52525B]">
+                    <td className="py-2 px-2.5 text-right tabular-nums text-zinc-600">
                       {formatNumber(n.totalBs)}
                     </td>
                     <td className="py-2 px-2.5 text-right tabular-nums font-bold text-[#991B1B]">
@@ -829,7 +997,7 @@ export const BalanceView: React.FC<Props> = ({ movimientos }) => {
           </div>
         </div>
 
-        {/* 6. GRÁFICOS (RECHARTS RESPONSIVOS CON COLORES SÓLIDOS CORPORATIVOS) */}
+        {/* 7. GRÁFICOS (RECHARTS RESPONSIVOS CON COLORES SÓLIDOS CORPORATIVOS) */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Gráfico 1: Barras agrupadas Ingresos vs Gastos Diarios ($ USD) */}
           <div className="bg-white border border-[#E4E4E7] rounded-lg p-3 shadow-xs">

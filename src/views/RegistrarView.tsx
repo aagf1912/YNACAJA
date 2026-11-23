@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
-import { Clipboard, ClipboardPaste, Plus, Pencil, Trash2, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
-import { Movimiento } from '../types';
+import { ClipboardPaste, Plus, Pencil, Trash2, CheckCircle2, AlertCircle, Loader2, Store } from 'lucide-react';
+import { Movimiento, Puesto } from '../types';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
 import { formatMontoMovimiento, formatNumber } from '../utils/format';
 import { METODOS_PAGO_LABELS } from '../types';
 import { ModalMovimiento } from '../components/ModalMovimiento';
 import { analizarTextoMovimientos } from '../services/api';
+import { parseTextoLocal, getVenezuelaDate } from '../utils/parserLocal';
 import { Clipboard as CapClipboard } from '@capacitor/clipboard';
 
 interface Props {
   tasaDia: number;
+  puestos?: Puesto[];
   onGuardarMovimientos: (movs: Omit<Movimiento, 'id' | 'created_at'>[]) => Promise<Movimiento[]>;
   onActualizarMovimiento: (mov: Movimiento) => Promise<void>;
   onEliminarMovimiento: (id: string) => Promise<void>;
@@ -17,11 +19,13 @@ interface Props {
 
 export const RegistrarView: React.FC<Props> = ({
   tasaDia,
+  puestos = [],
   onGuardarMovimientos,
   onActualizarMovimiento,
   onEliminarMovimiento,
 }) => {
   const [texto, setTexto] = useState('');
+  const [puestoSeleccionado, setPuestoSeleccionado] = useState<string>('');
   const [procesando, setProcesando] = useState(false);
   const [mensajeError, setMensajeError] = useState<string | null>(null);
   const [ultimoLote, setUltimoLote] = useState<Movimiento[]>([]);
@@ -61,8 +65,15 @@ export const RegistrarView: React.FC<Props> = ({
     setMensajeError(null);
 
     try {
-      const fechaActual = new Date().toISOString().split('T')[0];
-      const movimientosExtraidos = await analizarTextoMovimientos(texto, fechaActual);
+      const fechaActual = getVenezuelaDate();
+
+      // 1. Intentar primero con el parser local ultrarrápido
+      let movimientosExtraidos = parseTextoLocal(texto, fechaActual, 'admin');
+
+      // 2. Si no encuentra nada, consultar el backend API (respaldo Gemini)
+      if (movimientosExtraidos.length === 0) {
+        movimientosExtraidos = await analizarTextoMovimientos(texto, fechaActual, 'admin');
+      }
 
       if (movimientosExtraidos.length === 0) {
         setMensajeError('No se identificaron movimientos válidos en el texto ingresado.');
@@ -70,9 +81,9 @@ export const RegistrarView: React.FC<Props> = ({
         return;
       }
 
-      // Preparar para guardar, asignando la tasa_dia actual a tasa_aplicada
+      // Preparar para guardar, asignando la tasa_dia actual y el puesto seleccionado si aplica
       const aGuardar = movimientosExtraidos.map((m) => ({
-        fecha: m.fecha,
+        fecha: m.fecha || fechaActual,
         descripcion: m.descripcion,
         tipo: m.tipo,
         naturaleza: m.naturaleza,
@@ -81,6 +92,7 @@ export const RegistrarView: React.FC<Props> = ({
         moneda_original: m.moneda_original,
         monto_original: m.monto_original,
         tasa_aplicada: tasaDia,
+        puesto_id: puestoSeleccionado || null,
       }));
 
       const guardados = await onGuardarMovimientos(aGuardar);
@@ -95,11 +107,9 @@ export const RegistrarView: React.FC<Props> = ({
 
   const handleGuardarManual = async (mov: Omit<Movimiento, 'id' | 'created_at'> & { id?: string }) => {
     if (mov.id) {
-      // Actualización
       await onActualizarMovimiento(mov as Movimiento);
       setUltimoLote((prev) => prev.map((item) => (item.id === mov.id ? (mov as Movimiento) : item)));
     } else {
-      // Creación manual
       const guardados = await onGuardarMovimientos([mov]);
       setUltimoLote(guardados);
     }
@@ -139,9 +149,31 @@ export const RegistrarView: React.FC<Props> = ({
 
       {/* Tarjeta de Entrada de Texto */}
       <div className="bg-white border border-[#E4E4E7] rounded-lg p-3 sm:p-4 shadow-xs">
-        <label htmlFor="input-nota" className="block text-xs font-semibold text-[#52525B] mb-1.5">
-          Pegar texto de ventas y gastos (uno o varios días)
-        </label>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+          <label htmlFor="input-nota" className="block text-xs font-semibold text-[#52525B]">
+            Pegar texto de ventas y gastos (uno o varios días)
+          </label>
+
+          {/* Selector opcional de Puesto */}
+          {puestos.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <Store size={13} className="text-[#52525B]" />
+              <select
+                value={puestoSeleccionado}
+                onChange={(e) => setPuestoSeleccionado(e.target.value)}
+                className="text-xs px-2 py-1 border border-[#E4E4E7] rounded bg-[#FAFAFA] text-[#18181B] focus:outline-none focus:ring-1 focus:ring-[#2C474E]"
+              >
+                <option value="">Sin puesto específico (General)</option>
+                {puestos.filter((p) => p.activo).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    Asignar a: {p.nombre}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+
         <textarea
           id="input-nota"
           rows={6}
@@ -222,6 +254,11 @@ export const RegistrarView: React.FC<Props> = ({
                     <span className="text-[11px] text-[#52525B] bg-zinc-100 px-1.5 py-0.5 rounded border border-zinc-200">
                       {METODOS_PAGO_LABELS[item.metodo_pago]}
                     </span>
+                    {item.puesto && (
+                      <span className="text-[10px] text-[#166534] bg-[#ECFDF5] border border-[#BBF7D0] px-1.5 py-0.5 rounded font-semibold">
+                        {item.puesto.nombre}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 text-[11px] text-[#52525B]">
                     <span className="tabular-nums font-medium">{item.fecha}</span>
@@ -274,6 +311,8 @@ export const RegistrarView: React.FC<Props> = ({
         isOpen={modalManualAbierto}
         movimientoAEditar={movimientoParaEditar}
         tasaActual={tasaDia}
+        puestos={puestos}
+        puestoIdPorDefecto={puestoSeleccionado || null}
         onClose={() => {
           setModalManualAbierto(false);
           setMovimientoParaEditar(null);

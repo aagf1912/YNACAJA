@@ -17,7 +17,8 @@ export interface AnalizarResponse {
 
 export async function analizarTextoMovimientos(
   texto: string,
-  fechaActual: string
+  fechaActual: string,
+  rol: 'admin' | 'vendedor' = 'admin'
 ): Promise<ExtractedMovimiento[]> {
   const baseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
   const endpoint = baseUrl ? `${baseUrl}/api/analizar` : '/api/analizar';
@@ -30,6 +31,7 @@ export async function analizarTextoMovimientos(
     body: JSON.stringify({
       texto,
       fecha_actual: fechaActual,
+      rol,
     }),
   });
 
