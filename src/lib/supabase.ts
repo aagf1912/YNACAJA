@@ -11,8 +11,8 @@ const cleanEnv = (val: unknown, fallback: string): string => {
   return cleaned || fallback;
 };
 
-const supabaseUrl = cleanEnv(import.meta.env.VITE_SUPABASE_URL, FALLBACK_SUPABASE_URL);
-const supabaseAnonKey = cleanEnv(import.meta.env.VITE_SUPABASE_ANON_KEY, FALLBACK_SUPABASE_ANON_KEY);
+export const supabaseUrl = cleanEnv(import.meta.env.VITE_SUPABASE_URL, FALLBACK_SUPABASE_URL);
+export const supabaseAnonKey = cleanEnv(import.meta.env.VITE_SUPABASE_ANON_KEY, FALLBACK_SUPABASE_ANON_KEY);
 
 const isConfigured = Boolean(
   supabaseUrl &&
@@ -21,11 +21,10 @@ const isConfigured = Boolean(
   !supabaseUrl.includes('placeholder')
 );
 
-// Cliente Supabase con lock desbloqueado para evitar congelamiento de navigator.locks (10s) con Realtime
+// Cliente Supabase con configuración estándar de auth (sin lock personalizado)
 export const supabase = isConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
-        lock: async (_name, _acquireTimeout, fn) => await fn(),
         persistSession: true,
         autoRefreshToken: true,
       },

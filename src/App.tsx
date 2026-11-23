@@ -67,13 +67,20 @@ export const App: React.FC = () => {
     verificarSesion();
 
     if (supabase) {
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-        if (session?.user) {
-          const perf = await getPerfilUsuario(session.user.id);
-          setPerfil(perf);
-        } else {
-          setPerfil(null);
-        }
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        // Envolver en setTimeout 0 para no ejecutar await de consultas directamente dentro del callback y evitar bloquear el lock interno de Supabase
+        setTimeout(async () => {
+          if (session?.user) {
+            try {
+              const perf = await getPerfilUsuario(session.user.id);
+              setPerfil(perf);
+            } catch (err) {
+              console.warn('Error cargando perfil en onAuthStateChange:', err);
+            }
+          } else {
+            setPerfil(null);
+          }
+        }, 0);
       });
 
       return () => {

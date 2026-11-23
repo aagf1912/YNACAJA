@@ -26,6 +26,28 @@ import { formatNumber, formatUSD, formatVES } from '../utils/format';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { getSemanaLunesSabado, shiftSemana } from '../utils/dateUtils';
 import { getLiquidacionesSemanales, supabase } from '../services/supabase';
+import { supabaseUrl, supabaseAnonKey } from '../lib/supabase';
+
+// Lee directamente el token de sesión de Supabase de localStorage sin usar getSession (evita locks)
+function getAccessTokenFromStorage(): string {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.access_token) {
+            return parsed.access_token;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Error leyendo auth token de localStorage:', e);
+  }
+  return '';
+}
 
 interface Props {
   perfil: PerfilUsuario;
@@ -254,46 +276,65 @@ export const VendedorView: React.FC<Props> = ({
     setMensajeError(null);
     setMensajeExito(null);
 
-    try {
-      const client = supabase;
-      if (!client) {
-        throw new Error('Supabase no está configurado en el cliente.');
-      }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
+    try {
       const tasa = tasaDia > 0 ? tasaDia : 100;
       const fechaHoy = fechaHoyVzla;
+      const token = getAccessTokenFromStorage() || supabaseAnonKey;
 
-      // Llamada única directa vía RPC guardar_cierre_diario
-      const { error } = await client.rpc('guardar_cierre_diario', {
-        p_efectivo_bs: efBs,
-        p_pago_movil_bs: pmBs,
-        p_punto_bs: ptBs,
-        p_divisas_usd: divUSD,
-        p_gasto_bs: gBs,
-        p_gasto_desc: gastoDescripcion.trim() || '',
-        p_tasa: tasa,
-        p_fecha: fechaHoy,
+      const res = await fetch(`${supabaseUrl}/rest/v1/rpc/guardar_cierre_diario`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          p_efectivo_bs: efBs,
+          p_pago_movil_bs: pmBs,
+          p_punto_bs: ptBs,
+          p_divisas_usd: divUSD,
+          p_gasto_bs: gBs,
+          p_gasto_desc: gastoDescripcion.trim() || '',
+          p_tasa: tasa,
+          p_fecha: fechaHoy,
+        }),
+        signal: controller.signal,
       });
 
-      if (error) {
-        console.error('Error RPC guardar_cierre_diario:', error);
-        throw new Error(error.message || 'Error al guardar el cierre de caja en Supabase.');
+      if (!res.ok) {
+        let errMsg = 'Error al guardar cierre';
+        try {
+          const errData = await res.json();
+          errMsg = errData?.message || errData?.error_description || errMsg;
+        } catch {
+          const text = await res.text();
+          if (text) errMsg = text;
+        }
+        throw new Error(errMsg);
       }
 
-      setToastMensaje('Cierre guardado correctamente');
-      setMensajeExito('Cierre guardado correctamente');
+      setToastMensaje('Cierre del día guardado correctamente');
+      setMensajeExito('Cierre del día guardado correctamente');
       setTimeout(() => {
         setToastMensaje(null);
         setMensajeExito(null);
       }, 4000);
 
-      // Recargar los datos de la vista al recibir respuesta exitosa
+      // Recargar los datos de la semana sin bloquear el botón
       await cargarCierreDeHoy();
       await cargarLiquidaciones();
     } catch (err: any) {
       console.error('Error al guardar cierre de caja:', err);
-      setMensajeError(err?.message || 'Error al guardar el cierre de caja en Supabase.');
+      if (err.name === 'AbortError') {
+        setMensajeError('Tiempo de espera agotado al conectar con el servidor (8s).');
+      } else {
+        setMensajeError(err?.message || 'Error al guardar cierre');
+      }
     } finally {
+      clearTimeout(timeoutId);
       setGuardando(false);
     }
   };
