@@ -11,6 +11,54 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function llamarGeminiConReintentos(
+  modelo: string,
+  apiKey: string,
+  payload: any
+): Promise<{ ok: boolean; status: number; text: string; data?: any }> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`;
+  const maxIntentos = 3; // Intento inicial + hasta 2 reintentos (3 intentos totales)
+  let ultimoStatus = 0;
+  let ultimoTexto = '';
+
+  for (let intento = 1; intento <= maxIntentos; intento++) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        return { ok: true, status: res.status, text: '', data };
+      }
+
+      ultimoStatus = res.status;
+      ultimoTexto = await res.text();
+
+      // Si es saturación (429 Too Many Requests o 503 Service Unavailable) y no es el último intento, esperar 1.5s
+      if ((res.status === 429 || res.status === 503) && intento < maxIntentos) {
+        await delay(1500);
+        continue;
+      }
+
+      // Si es otro error de cliente (ej. 400), no tiene sentido reintentar
+      return { ok: false, status: res.status, text: ultimoTexto };
+    } catch (e: any) {
+      ultimoStatus = 500;
+      ultimoTexto = e?.message || 'Error de conexión';
+      if (intento < maxIntentos) {
+        await delay(1500);
+      }
+    }
+  }
+
+  return { ok: false, status: ultimoStatus, text: ultimoTexto };
+}
+
 export const onRequestOptions: PagesFunction = async () => {
   return new Response(null, {
     status: 204,
@@ -152,23 +200,22 @@ Reglas estrictas de clasificación:
       },
     };
 
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
+    // 1. Intentar con modelo principal gemini-3.8-flash (con hasta 2 reintentos ante 429/503 con 1.5s de espera)
+    let geminiResultado = await llamarGeminiConReintentos('gemini-3.8-flash', apiKey, payload);
 
-    const geminiRes = await fetch(geminiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    // 2. Si falló por saturación (429 Too Many Requests o 503 Service Unavailable), fallback al modelo gemini-3.8-flash-lite
+    if (!geminiResultado.ok && (geminiResultado.status === 429 || geminiResultado.status === 503)) {
+      geminiResultado = await llamarGeminiConReintentos('gemini-3.8-flash-lite', apiKey, payload);
+    }
 
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text();
+    if (!geminiResultado.ok) {
       return new Response(
-        JSON.stringify({ error: `Error desde Gemini API (${geminiRes.status}): ${errText}` }),
+        JSON.stringify({ error: `Error desde Gemini API (${geminiResultado.status}): ${geminiResultado.text}` }),
         { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const geminiData = await geminiRes.json() as any;
+    const geminiData = geminiResultado.data as any;
     const candidates = geminiData?.candidates;
     const rawJson = candidates?.[0]?.content?.parts?.[0]?.text;
 
