@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Plus, Pencil, Check, Store, Percent, AlertCircle, Loader2, Trash2 } from 'lucide-react';
 import { Puesto } from '../types';
 import { getPuestos, crearPuesto, actualizarPuesto, eliminarPuesto } from '../services/supabase';
@@ -44,8 +44,14 @@ export const ModalGestionPuestos: React.FC<Props> = ({
   const [guardando, setGuardando] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Mantener referencia estable al callback del padre para no provocar re-renders
+  const onPuestosActualizadosRef = useRef(onPuestosActualizados);
+  useEffect(() => {
+    onPuestosActualizadosRef.current = onPuestosActualizados;
+  }, [onPuestosActualizados]);
+
   // Consultar directamente desde Supabase con timeout de 8s y try/catch/finally garantizado
-  const recargarPuestosDirecto = useCallback(async () => {
+  const cargarPuestos = async () => {
     setCargando(true);
     setErrorMsg(null);
     try {
@@ -55,25 +61,19 @@ export const ModalGestionPuestos: React.FC<Props> = ({
         'Tiempo de espera agotado (8s) al sincronizar puestos con Supabase.'
       );
       setListaPuestos(puestosFrescos);
-      onPuestosActualizados(puestosFrescos);
+      onPuestosActualizadosRef.current?.(puestosFrescos);
     } catch (err: any) {
       console.error('Error al consultar puestos:', err);
       setErrorMsg(err?.message || 'Error de conexión o permisos al consultar puestos en Supabase.');
     } finally {
       setCargando(false);
     }
-  }, [onPuestosActualizados]);
+  };
 
+  // Se ejecuta únicamente al montar el modal, sin dependencias inestables (evita React error #185)
   useEffect(() => {
-    if (isOpen) {
-      recargarPuestosDirecto();
-    } else {
-      setEditandoId(null);
-      setErrorMsg(null);
-      setCargando(false);
-      setGuardando(false);
-    }
-  }, [isOpen, recargarPuestosDirecto]);
+    cargarPuestos();
+  }, []);
 
   if (!isOpen) return null;
 
@@ -103,7 +103,7 @@ export const ModalGestionPuestos: React.FC<Props> = ({
         'Tiempo de espera agotado (8s) al guardar el nuevo puesto en Supabase.'
       );
 
-      await recargarPuestosDirecto();
+      await cargarPuestos();
       setNuevoNombre('');
       setNuevaComision('22.00');
     } catch (err: any) {
@@ -149,7 +149,7 @@ export const ModalGestionPuestos: React.FC<Props> = ({
         'Tiempo de espera agotado (8s) al actualizar el puesto en Supabase.'
       );
 
-      await recargarPuestosDirecto();
+      await cargarPuestos();
       setEditandoId(null);
     } catch (err: any) {
       console.error('Error al actualizar puesto:', err);
@@ -175,7 +175,7 @@ export const ModalGestionPuestos: React.FC<Props> = ({
         'Tiempo de espera agotado (8s) al eliminar el puesto en Supabase.'
       );
 
-      await recargarPuestosDirecto();
+      await cargarPuestos();
     } catch (err: any) {
       console.error('Error al eliminar puesto:', err);
       setErrorMsg(err?.message || 'Error al eliminar el puesto en Supabase.');
@@ -215,7 +215,7 @@ export const ModalGestionPuestos: React.FC<Props> = ({
                 <span className="font-mono break-words leading-relaxed text-[11px] block">{errorMsg}</span>
                 <button
                   type="button"
-                  onClick={recargarPuestosDirecto}
+                  onClick={cargarPuestos}
                   className="mt-2 px-2.5 py-1 bg-red-800 text-white font-bold rounded hover:bg-red-900 transition-colors inline-flex items-center gap-1 text-[11px]"
                 >
                   <Loader2 size={11} className={cargando ? 'animate-spin' : ''} />

@@ -1,8 +1,12 @@
 import { createClient, User } from '@supabase/supabase-js';
 import { ConfigNegocio, Movimiento, PerfilUsuario, Puesto, RolUsuario } from '../types';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// Fallback de configuración pública de Supabase para builds web (ej. Cloudflare Pages)
+const FALLBACK_SUPABASE_URL = 'https://xbjywyzuhtbmuusytsty.supabase.co';
+const FALLBACK_SUPABASE_ANON_KEY = 'sb_publishable_ZuesPOgbvmZ7dVHgfd46_Q_HShdR3L7';
+
+const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim() || FALLBACK_SUPABASE_URL;
+const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim() || FALLBACK_SUPABASE_ANON_KEY;
 
 const isConfigured = Boolean(
   supabaseUrl &&

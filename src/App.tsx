@@ -185,6 +185,16 @@ export const App: React.FC = () => {
     }
   };
 
+  // Cerrar Modal Puestos
+  const handleCerrarModalPuestos = useCallback(() => {
+    setModalPuestosAbierto(false);
+  }, []);
+
+  // Actualización de puestos desde el modal
+  const handlePuestosActualizados = useCallback((actualizados: Puesto[]) => {
+    setPuestos(actualizados);
+  }, []);
+
   // Pantalla de carga mientras se verifica auth
   if (cargandoAuth) {
     return (
@@ -267,12 +277,12 @@ export const App: React.FC = () => {
       {!esVendedor && <Navigation activeTab={activeTab} onSelectTab={setActiveTab} />}
 
       {/* Modal para Gestión de Puestos de Venta (Solo Admin) */}
-      {!esVendedor && (
+      {!esVendedor && modalPuestosAbierto && (
         <ModalGestionPuestos
           isOpen={modalPuestosAbierto}
           puestos={puestos}
-          onClose={() => setModalPuestosAbierto(false)}
-          onPuestosActualizados={(actualizados) => setPuestos(actualizados)}
+          onClose={handleCerrarModalPuestos}
+          onPuestosActualizados={handlePuestosActualizados}
         />
       )}
     </div>
