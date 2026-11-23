@@ -327,8 +327,10 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     }
 
     // 2. Solo si el parser local no encontró movimientos, llamar a gemini-3.8-flash como respaldo
-    const apiKey = env.GEMINI_API_KEY;
-    if (!apiKey) {
+    const rawKey = env.GEMINI_API_KEY || (typeof process !== 'undefined' ? (process.env as any)?.GEMINI_API_KEY : '') || '';
+    const apiKeys = rawKey.split(',').map((k: string) => k.trim()).filter(Boolean);
+
+    if (apiKeys.length === 0) {
       return new Response(
         JSON.stringify({ error: 'No se encontraron movimientos en la nota y GEMINI_API_KEY no está configurada.' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -385,7 +387,25 @@ Clasifica tipo ("venta"|"gasto"), naturaleza ("Negocio"|"Personal"|"Créditos / 
       },
     };
 
-    const geminiResultado = await llamarGeminiRespaldo(apiKey, payload);
+    let geminiResultado: { ok: boolean; status: number; text: string; data?: any } = {
+      ok: false,
+      status: 500,
+      text: 'No se ejecutó la petición a Gemini.',
+    };
+
+    // Recorrer las claves en orden: si una devuelve 429 (cuota agotada), pasa inmediatamente a la siguiente
+    for (const key of apiKeys) {
+      geminiResultado = await llamarGeminiRespaldo(key, payload);
+      if (geminiResultado.ok) {
+        break;
+      }
+      if (geminiResultado.status === 429) {
+        console.warn('Clave de Gemini con cuota agotada (429), pasando a la siguiente clave...');
+        continue;
+      }
+      // Si no es 429 pero falló, también intentar con la siguiente clave por redundancia
+      console.warn(`Clave de Gemini devolvió status ${geminiResultado.status}, probando con la siguiente clave...`);
+    }
 
     if (!geminiResultado.ok) {
       return new Response(
