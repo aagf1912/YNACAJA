@@ -25,7 +25,7 @@ import { Movimiento, PerfilUsuario, LiquidacionSemanal } from '../types';
 import { formatNumber, formatUSD, formatVES } from '../utils/format';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { getSemanaLunesSabado, shiftSemana } from '../utils/dateUtils';
-import { getLiquidacionesSemanales, eliminarMovimientosDiaPuesto, supabase } from '../services/supabase';
+import { getLiquidacionesSemanales, supabase } from '../services/supabase';
 
 interface Props {
   perfil: PerfilUsuario;
@@ -128,12 +128,28 @@ export const VendedorView: React.FC<Props> = ({
   }, [liquidaciones, perfil.puesto_id, infoSemanaHoy.semanaInicio]);
 
   // Cargar en el formulario ÚNICAMENTE los registros guardados de HOY
-  const cargarCierreDeHoy = useCallback(() => {
-    const movsHoy = movimientos.filter(
+  const cargarCierreDeHoy = useCallback(async () => {
+    let movsHoy = movimientos.filter(
       (m) =>
         (!perfil.puesto_id || m.puesto_id === perfil.puesto_id) &&
         m.fecha === fechaHoyVzla
     );
+
+    const client = supabase;
+    if (client && perfil.puesto_id) {
+      try {
+        const { data, error } = await client
+          .from('movimientos')
+          .select('*')
+          .eq('puesto_id', perfil.puesto_id)
+          .eq('fecha', fechaHoyVzla);
+        if (!error && Array.isArray(data)) {
+          movsHoy = data;
+        }
+      } catch (e) {
+        console.warn('Aviso cargando movimientos de hoy directo:', e);
+      }
+    }
 
     let efBs = 0;
     let pmBs = 0;
@@ -239,128 +255,30 @@ export const VendedorView: React.FC<Props> = ({
     setMensajeExito(null);
 
     try {
-      const guardarOperacion = async () => {
-        const tasa = tasaDia > 0 ? tasaDia : 100;
-        const fechaHoy = fechaHoyVzla;
+      const client = supabase;
+      if (!client) {
+        throw new Error('Supabase no está configurado en el cliente.');
+      }
 
-        // 1. Eliminar registros previos de este puesto en la fecha de HOY
-        await eliminarMovimientosDiaPuesto(perfil.puesto_id!, fechaHoy);
+      const tasa = tasaDia > 0 ? tasaDia : 100;
+      const fechaHoy = fechaHoyVzla;
 
-        // 2. Construir los registros a insertar con tipo 'venta'
-        const nuevosMovs: Omit<Movimiento, 'id' | 'created_at'>[] = [];
+      // Llamada única directa vía RPC guardar_cierre_diario
+      const { error } = await client.rpc('guardar_cierre_diario', {
+        p_efectivo_bs: efBs,
+        p_pago_movil_bs: pmBs,
+        p_punto_bs: ptBs,
+        p_divisas_usd: divUSD,
+        p_gasto_bs: gBs,
+        p_gasto_desc: gastoDescripcion.trim() || '',
+        p_tasa: tasa,
+        p_fecha: fechaHoy,
+      });
 
-        if (efBs > 0) {
-          nuevosMovs.push({
-            fecha: fechaHoy,
-            descripcion: 'Venta Efectivo Bs',
-            tipo: 'venta',
-            naturaleza: 'Negocio',
-            categoria: 'Ventas',
-            metodo_pago: 'efectivo_bs',
-            moneda_original: 'VES',
-            monto_original: efBs,
-            tasa_aplicada: tasa,
-            tasa,
-            monto_bs: efBs,
-            monto_usd: Math.round((efBs / tasa) * 100) / 100,
-            puesto_id: perfil.puesto_id,
-            creado_por: perfil.id,
-            user_id: perfil.id,
-          });
-        }
-
-        if (pmBs > 0) {
-          nuevosMovs.push({
-            fecha: fechaHoy,
-            descripcion: 'Venta Pago Móvil',
-            tipo: 'venta',
-            naturaleza: 'Negocio',
-            categoria: 'Ventas',
-            metodo_pago: 'pago_movil',
-            moneda_original: 'VES',
-            monto_original: pmBs,
-            tasa_aplicada: tasa,
-            tasa,
-            monto_bs: pmBs,
-            monto_usd: Math.round((pmBs / tasa) * 100) / 100,
-            puesto_id: perfil.puesto_id,
-            creado_por: perfil.id,
-            user_id: perfil.id,
-          });
-        }
-
-        if (ptBs > 0) {
-          nuevosMovs.push({
-            fecha: fechaHoy,
-            descripcion: 'Venta Punto de Venta',
-            tipo: 'venta',
-            naturaleza: 'Negocio',
-            categoria: 'Ventas',
-            metodo_pago: 'punto_venta',
-            moneda_original: 'VES',
-            monto_original: ptBs,
-            tasa_aplicada: tasa,
-            tasa,
-            monto_bs: ptBs,
-            monto_usd: Math.round((ptBs / tasa) * 100) / 100,
-            puesto_id: perfil.puesto_id,
-            creado_por: perfil.id,
-            user_id: perfil.id,
-          });
-        }
-
-        if (divUSD > 0) {
-          nuevosMovs.push({
-            fecha: fechaHoy,
-            descripcion: 'Venta Divisas ($)',
-            tipo: 'venta',
-            naturaleza: 'Negocio',
-            categoria: 'Ventas',
-            metodo_pago: 'divisa',
-            moneda_original: 'USD',
-            monto_original: divUSD,
-            tasa_aplicada: tasa,
-            tasa,
-            monto_usd: divUSD,
-            monto_bs: Math.round(divUSD * tasa * 100) / 100,
-            puesto_id: perfil.puesto_id,
-            creado_por: perfil.id,
-            user_id: perfil.id,
-          });
-        }
-
-        // 3. Si hubo gasto del puesto en efectivo, insertar con tipo 'gasto'
-        if (gBs > 0) {
-          nuevosMovs.push({
-            fecha: fechaHoy,
-            descripcion: gastoDescripcion.trim() || 'Gasto operativo del puesto (Efectivo)',
-            tipo: 'gasto',
-            naturaleza: 'Negocio',
-            categoria: 'Hielo y Varios Operativos',
-            metodo_pago: 'efectivo_bs',
-            moneda_original: 'VES',
-            monto_original: gBs,
-            tasa_aplicada: tasa,
-            tasa,
-            monto_bs: gBs,
-            monto_usd: Math.round((gBs / tasa) * 100) / 100,
-            puesto_id: perfil.puesto_id,
-            creado_por: perfil.id,
-            user_id: perfil.id,
-          });
-        }
-
-        if (nuevosMovs.length > 0) {
-          await onGuardarMovimientos(nuevosMovs);
-        }
-      };
-
-      // Timeout de seguridad en la vista (10 segundos)
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Tiempo de espera agotado al conectar con Supabase (10s)')), 10000)
-      );
-
-      await Promise.race([guardarOperacion(), timeoutPromise]);
+      if (error) {
+        console.error('Error RPC guardar_cierre_diario:', error);
+        throw new Error(error.message || 'Error al guardar el cierre de caja en Supabase.');
+      }
 
       setToastMensaje('Cierre guardado correctamente');
       setMensajeExito('Cierre guardado correctamente');
@@ -368,6 +286,10 @@ export const VendedorView: React.FC<Props> = ({
         setToastMensaje(null);
         setMensajeExito(null);
       }, 4000);
+
+      // Recargar los datos de la vista al recibir respuesta exitosa
+      await cargarCierreDeHoy();
+      await cargarLiquidaciones();
     } catch (err: any) {
       console.error('Error al guardar cierre de caja:', err);
       setMensajeError(err?.message || 'Error al guardar el cierre de caja en Supabase.');
