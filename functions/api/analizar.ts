@@ -11,11 +11,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-const TIMEOUT_MS = 15000;
+const TIMEOUT_MS = 25000;
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Ejecuta una petición directa a Gemini 3.8 Flash con AbortSignal.timeout(15000)
+ * Ejecuta una petición directa a Gemini 3.8 Flash con AbortSignal.timeout(25000)
+ * Si falla por parámetro no soportado (thinkingConfig), prueba automáticamente sin thinkingConfig
  */
 async function ejecutarLlamadaGemini(
   apiKey: string,
@@ -37,6 +38,32 @@ async function ejecutarLlamadaGemini(
     }
 
     const text = await res.text();
+
+    // Si falla con error 400 por parámetro no soportado (ej. thinkingConfig), probar sin thinkingConfig
+    if (res.status === 400 && payload?.generationConfig?.thinkingConfig) {
+      console.warn('Error 400 con thinkingConfig, reintentando sin thinkingConfig...');
+      const payloadSinThinking = {
+        ...payload,
+        generationConfig: { ...payload.generationConfig },
+      };
+      delete payloadSinThinking.generationConfig.thinkingConfig;
+
+      const retryRes = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payloadSinThinking),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+
+      if (retryRes.ok) {
+        const retryData = await retryRes.json();
+        return { ok: true, status: retryRes.status, text: '', data: retryData };
+      }
+
+      const retryText = await retryRes.text();
+      return { ok: false, status: retryRes.status, text: retryText };
+    }
+
     return { ok: false, status: res.status, text };
   } catch (err: any) {
     const isTimeout = err?.name === 'TimeoutError' || err?.message?.toLowerCase().includes('timeout');
@@ -49,13 +76,13 @@ async function ejecutarLlamadaGemini(
 }
 
 /**
- * Llama a Gemini 3.8 Flash con hasta 4 reintentos si responde 503 o 429 (esperando 2s entre cada uno)
+ * Llama a Gemini 3.8 Flash con hasta 2 reintentos si responde 503 o 429 (esperando 1s entre cada uno)
  */
 async function llamarConReintentos(
   apiKey: string,
   payload: any,
-  maxReintentos: number = 4,
-  delayMs: number = 2000
+  maxReintentos: number = 2,
+  delayMs: number = 1000
 ): Promise<{ ok: boolean; status: number; text: string; data?: any }> {
   let resultado = await ejecutarLlamadaGemini(apiKey, payload);
 
@@ -160,6 +187,9 @@ Reglas estrictas de clasificación:
       generationConfig: {
         responseMimeType: 'application/json',
         temperature: 0.1,
+        thinkingConfig: {
+          thinkingBudget: 0,
+        },
         responseSchema: {
           type: 'OBJECT',
           properties: {
@@ -212,8 +242,8 @@ Reglas estrictas de clasificación:
       },
     };
 
-    // Llamar exclusivamente a gemini-3.8-flash con hasta 4 reintentos esperando 2s ante 503 o 429
-    const geminiResultado = await llamarConReintentos(apiKey, payload, 4, 2000);
+    // Llamar a gemini-3.8-flash con máximo 2 reintentos esperando 1s ante 503 o 429
+    const geminiResultado = await llamarConReintentos(apiKey, payload, 2, 1000);
 
     if (!geminiResultado.ok) {
       return new Response(
