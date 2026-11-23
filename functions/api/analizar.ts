@@ -26,14 +26,38 @@ interface MovimientoExtracted {
 }
 
 /**
- * Parser ultrarrápido en JavaScript puro para extraer movimientos en milisegundos sin consumir cuota
+ * Retorna la fecha actual en Venezuela (UTC-4) en formato YYYY-MM-DD
  */
-function extraerMovimientosLocal(texto: string, fechaReferencia: string): MovimientoExtracted[] {
-  const refDate = fechaReferencia || new Date().toISOString().split('T')[0];
-  const [refY, refM] = refDate.split('-').map(Number);
+function getVenezuelaDate(): string {
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const vzlaTime = new Date(utc - (4 * 3600000));
+  const yyyy = vzlaTime.getFullYear();
+  const mm = String(vzlaTime.getMonth() + 1).padStart(2, '0');
+  const dd = String(vzlaTime.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
 
-  function resolverFecha(textoSegmento: string, fechaActualContexto: string): string {
-    if (!textoSegmento) return fechaActualContexto;
+/**
+ * Parser ultrarrápido en JavaScript puro para extraer movimientos en milisegundos sin consumir cuota
+ * Resuelve:
+ * 1. Extraer fecha primero y borrarla antes de parsear montos (evita que el año '26' se lea como gasto).
+ * 2. Ignorar cualquier línea o bloque que diga "total" para no duplicar ventas.
+ * 3. Aceptar montos con o sin unidad después del método de pago, asumiendo Bs si no tiene $ o divisa.
+ * 4. Soporta secciones ('Ventas:' vs 'Gastos:') y asigna tipo 'venta' por defecto a métodos de pago.
+ */
+function extraerMovimientosLocal(texto: string, fechaReferencia?: string): MovimientoExtracted[] {
+  const refDate = fechaReferencia || getVenezuelaDate();
+  const [refY] = refDate.split('-').map(Number);
+
+  function resolverFecha(textoSegmento: string, fallback: string): string {
+    if (!textoSegmento) return fallback;
+
+    // YYYY-MM-DD o YYYY/MM/DD
+    const isoMatch = textoSegmento.match(/\b(20\d{2})[\/\-](\d{1,2})[\/\-](\d{1,2})\b/);
+    if (isoMatch) {
+      return `${isoMatch[1]}-${String(isoMatch[2]).padStart(2, '0')}-${String(isoMatch[3]).padStart(2, '0')}`;
+    }
 
     // DD-MM-YYYY o DD/MM/YYYY o DD-MM-YY o DD/MM/YY
     const dateMatch = textoSegmento.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
@@ -47,213 +71,230 @@ function extraerMovimientosLocal(texto: string, fechaReferencia: string): Movimi
       }
     }
 
-    // YYYY-MM-DD
-    const isoMatch = textoSegmento.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
-    if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
-
-    // Nombres de día: lunes 18, martes 18/11, etc.
-    const diaNumMatch = textoSegmento.match(/\b(?:lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\s+(\d{1,2})\b/i);
-    if (diaNumMatch) {
-      const d = parseInt(diaNumMatch[1], 10);
-      if (d <= 31) {
-        return `${refY}-${String(refM).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      }
-    }
-
-    return fechaActualContexto;
+    return fallback;
   }
 
   const lineas = texto.split(/\r?\n/);
   const resultados: MovimientoExtracted[] = [];
   let fechaActualCursor = refDate;
+  let seccionActual: 'ventas' | 'gastos' | 'general' = 'general';
 
   for (let linea of lineas) {
     linea = linea.trim();
     if (!linea) continue;
 
-    // 1. Si la línea es SOLAMENTE una fecha o día (ej. "20-11-26", "18/11/2026:", "Martes 18:")
-    const fechaPuraMatch = linea.match(/^(?:(?:lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\s+)?(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?|\d{1,2})\:?$/i);
-    if (fechaPuraMatch) {
-      fechaActualCursor = resolverFecha(linea, fechaActualCursor);
+    // 2. Ignorar cualquier línea completa que diga "total" (ej: "Total: 50,33$" o "Total ventas: 100")
+    if (/^\s*total(?:es)?\b/i.test(linea) && !/\b(ventas?|gastos?|egresos?|ingresos?)\s*[:=-]/i.test(linea)) {
       continue;
     }
 
-    // 2. Si la línea empieza con un prefijo de fecha tipo "Martes 18: ..." o "18-11-26: ..."
-    const headerMatch = linea.match(/^((?:(?:lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\s+)?(?:\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?|\d{1,2}))\s*[\:\-]\s*(.*)$/i);
-    let itemsStr = linea;
-    if (headerMatch) {
-      fechaActualCursor = resolverFecha(headerMatch[1], fechaActualCursor);
-      itemsStr = headerMatch[2];
+    // 1. Extraer la fecha primero (DD-MM-YY o DD/MM/YYYY) y BORRAR ese texto antes de buscar montos
+    const dateRegex = /\b(?:(20\d{2}[\/\-]\d{1,2}[\/\-]\d{1,2})|(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?))\b/;
+    const dateMatch = linea.match(dateRegex);
+    if (dateMatch) {
+      const fechaDetectada = resolverFecha(dateMatch[0], '');
+      if (fechaDetectada) {
+        fechaActualCursor = fechaDetectada;
+        // Borrar el texto de la fecha para que el año (ej. "26" en "19-11-26") nunca se lea como monto
+        linea = linea.replace(dateMatch[0], ' ');
+      }
     }
 
-    if (!itemsStr.trim()) continue;
+    // Borrar nombres de día de la semana si quedaron sueltos
+    linea = linea.replace(/\b(?:lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\b/gi, ' ');
 
-    // Separar ítems por comas, punto y coma, " y ", o puntos seguidos de espacio o letra
-    const items = itemsStr
-      .split(/(?:[\,\;]\s+|\s+y\s+|\.\s+(?=[a-zA-Z\d]))/i)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+    // Limpiar caracteres de markdown, dos puntos o guiones al inicio/final
+    linea = linea.replace(/^[\s#*_\-:\.]+\s*/, '').replace(/[*_]+$/, '').trim();
+    if (!linea) continue;
 
-    for (const item of items) {
-      // Buscar monto numérico (45.000, 45000, 15$, $15, 12,500.00, etc.)
-      const regexMonto = /(?:\$|usd)?\s*(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+,\d+|\d+\.\d+|\d+)\s*(?:\$|usd|divisas?|dolares?|dólares?|bs|ves|bolivares|bolívares)?/i;
-      const montoMatch = item.match(regexMonto);
+    // 4. Soportar encabezados de sección ("Ventas:" vs "Gastos:")
+    if (/^(?:ventas?|ingresos?)\s*[:=-]?$/i.test(linea)) {
+      seccionActual = 'ventas';
+      continue;
+    }
+    if (/^(?:gastos?|egresos?)\s*[:=-]?$/i.test(linea)) {
+      seccionActual = 'gastos';
+      continue;
+    }
 
-      if (!montoMatch) continue;
-
-      const rawMontoStr = montoMatch[1];
-      if (!rawMontoStr) continue;
-
-      let montoNum = 0;
-      if (/^\d{1,3}(?:\.\d{3})+$/.test(rawMontoStr)) {
-        montoNum = parseFloat(rawMontoStr.replace(/\./g, ''));
-      } else if (/^\d{1,3}(?:\.\d{3})+,\d+$/.test(rawMontoStr)) {
-        montoNum = parseFloat(rawMontoStr.replace(/\./g, '').replace(',', '.'));
-      } else if (/^\d+,\d+$/.test(rawMontoStr)) {
-        montoNum = parseFloat(rawMontoStr.replace(',', '.'));
-      } else {
-        montoNum = parseFloat(rawMontoStr);
-      }
-
-      if (isNaN(montoNum) || montoNum <= 0) continue;
-
-      const norm = item.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-
-      // Detectar moneda original
-      let moneda: 'VES' | 'USD' = 'VES';
-      if (norm.includes('$') || norm.includes('usd') || norm.includes('divisa') || norm.includes('dolar')) {
-        moneda = 'USD';
-      }
-
-      // Detectar método de pago
-      let metodo: 'pago_movil' | 'punto_venta' | 'efectivo_bs' | 'divisa' = 'efectivo_bs';
-      if (moneda === 'USD') {
-        metodo = 'divisa';
-      } else if (/\bpm\b|pago\s*movil|transferencia|transf|bcv|banesco|mercantil/.test(norm)) {
-        metodo = 'pago_movil';
-      } else if (/punto|pos|tarjeta|tdc|debito|biopago/.test(norm)) {
-        metodo = 'punto_venta';
-      } else if (/efectivo/.test(norm)) {
-        metodo = 'efectivo_bs';
-      }
-
-      // Palabras clave de gastos
-      const esGasto =
-        norm.includes('hielo') ||
-        norm.includes('leche') ||
-        norm.includes('pasta') ||
-        norm.includes('espagueti') ||
-        norm.includes('azucar') ||
-        norm.includes('canela') ||
-        norm.includes('vainilla') ||
-        norm.includes('vaso') ||
-        norm.includes('pitillo') ||
-        norm.includes('tapa') ||
-        norm.includes('bolsa') ||
-        norm.includes('servilleta') ||
-        norm.includes('empaque') ||
-        norm.includes('cashea') ||
-        norm.includes('krece') ||
-        norm.includes('cuota') ||
-        norm.includes('prestamo') ||
-        norm.includes('hamburguesa') ||
-        norm.includes('empanada') ||
-        norm.includes('almuerzo') ||
-        norm.includes('desayuno') ||
-        norm.includes('cena') ||
-        norm.includes('comida') ||
-        norm.includes('refresco') ||
-        norm.includes('para mi') ||
-        norm.includes('mio') ||
-        norm.includes('ropa') ||
-        norm.includes('recarga') ||
-        norm.includes('saldo') ||
-        norm.includes('pasaje') ||
-        norm.includes('taxi') ||
-        norm.includes('gasolina') ||
-        norm.includes('nomina') ||
-        norm.includes('sueldo') ||
-        norm.includes('limpieza') ||
-        norm.includes('cloro') ||
-        norm.includes('jabon') ||
-        norm.includes('gasto') ||
-        norm.includes('compra');
-
-      let tipo: 'venta' | 'gasto' = 'gasto';
-      let categoria = 'Hielo y Varios Operativos';
-      let naturaleza: 'Negocio' | 'Personal' | 'Créditos / Otros' = 'Negocio';
-      let descripcion = item;
-
-      if (!esGasto && (norm.includes('venta') || /\bpm\b|pago\s*movil/.test(norm) || norm.includes('punto') || norm.includes('divisa') || norm.includes('ingreso') || norm.includes('caja'))) {
-        tipo = 'venta';
-        categoria = 'Ventas';
-        naturaleza = 'Negocio';
-        if (metodo === 'pago_movil') descripcion = 'Venta Pago Móvil';
-        else if (metodo === 'punto_venta') descripcion = 'Venta Punto de Venta';
-        else if (metodo === 'divisa') descripcion = 'Venta Divisa';
-        else descripcion = 'Venta Efectivo Bs';
-      } else {
-        tipo = 'gasto';
-
-        // Clasificar en las 9 categorías obligatorias
-        if (norm.includes('nomina') || norm.includes('sueldo') || norm.includes('salario')) {
-          categoria = 'Nómina / Sueldos';
-          naturaleza = 'Negocio';
-          descripcion = 'Nómina / Sueldos';
-        } else if (norm.includes('cashea') || norm.includes('krece') || norm.includes('cuota') || norm.includes('prestamo')) {
-          categoria = 'Créditos (Cashea / Krece)';
-          naturaleza = 'Créditos / Otros';
-          descripcion = norm.includes('cashea') ? 'Cuota Cashea' : (norm.includes('krece') ? 'Cuota Krece' : 'Cuota Crédito');
-        } else if (norm.includes('leche') || norm.includes('pasta') || norm.includes('espagueti') || norm.includes('azucar') || norm.includes('canela') || norm.includes('vainilla') || norm.includes('materia prima')) {
-          categoria = 'Materia Prima';
-          naturaleza = 'Negocio';
-          if (norm.includes('leche condensada')) descripcion = 'Leche condensada';
-          else if (norm.includes('leche')) descripcion = 'Leche';
-          else if (norm.includes('pasta') || norm.includes('espagueti')) descripcion = 'Pasta';
-          else if (norm.includes('azucar')) descripcion = 'Azúcar';
-          else if (norm.includes('canela')) descripcion = 'Canela';
-          else descripcion = 'Materia Prima';
-        } else if (norm.includes('hamburguesa') || norm.includes('empanada') || norm.includes('almuerzo') || norm.includes('desayuno') || norm.includes('cena') || norm.includes('comida') || norm.includes('refresco')) {
-          categoria = 'Comidas y Bebidas';
-          naturaleza = 'Personal';
-          if (norm.includes('hamburguesa')) descripcion = 'Hamburguesa personal';
-          else if (norm.includes('empanada')) descripcion = 'Empanada personal';
-          else if (norm.includes('almuerzo')) descripcion = 'Almuerzo personal';
-          else if (norm.includes('refresco')) descripcion = 'Refresco personal';
-          else descripcion = 'Comida personal';
-        } else if (norm.includes('vaso') || norm.includes('pitillo') || norm.includes('tapa') || norm.includes('bolsa') || norm.includes('servilleta') || norm.includes('empaque')) {
-          categoria = 'Insumos y Empaques';
-          naturaleza = 'Negocio';
-          descripcion = 'Insumos y empaques';
-        } else if (norm.includes('pasaje') || norm.includes('taxi') || norm.includes('gasolina') || norm.includes('transporte') || norm.includes('carrera') || norm.includes('flete')) {
-          categoria = 'Transporte y Logística';
-          naturaleza = 'Negocio';
-          descripcion = 'Transporte / Logística';
-        } else if (norm.includes('recarga') || norm.includes('saldo') || norm.includes('luz') || norm.includes('cantv') || norm.includes('internet') || norm.includes('servicio')) {
-          categoria = 'Recargas y Servicios';
-          naturaleza = 'Negocio';
-          descripcion = 'Recargas y Servicios';
-        } else if (norm.includes('ropa') || norm.includes('regalo') || norm.includes('ocio') || norm.includes('para mi') || norm.includes('mio') || norm.includes('personal')) {
-          categoria = 'Personal / Ocio / Regalos';
-          naturaleza = 'Personal';
-          descripcion = 'Gasto personal / ocio';
-        } else {
-          categoria = 'Hielo y Varios Operativos';
-          naturaleza = 'Negocio';
-          descripcion = norm.includes('hielo') ? 'Hielo' : (norm.includes('limpieza') ? 'Limpieza' : 'Varios operativos');
+    // Si la línea contiene "Ventas: ... Gastos: ..." en la misma línea
+    let partesSeccion: { seccion: 'ventas' | 'gastos' | 'general'; texto: string }[] = [{ seccion: seccionActual, texto: linea }];
+    if (/ventas?\s*[:=-]/i.test(linea) || /gastos?\s*[:=-]/i.test(linea) || /egresos?\s*[:=-]/i.test(linea)) {
+      partesSeccion = [];
+      const tokens = linea.split(/(ventas?\s*[:=-]|gastos?\s*[:=-]|egresos?\s*[:=-])/i);
+      let sec = seccionActual;
+      for (const t of tokens) {
+        if (/^ventas?\s*[:=-]/i.test(t)) {
+          sec = 'ventas';
+          seccionActual = 'ventas';
+        } else if (/^(?:gastos?|egresos?)\s*[:=-]/i.test(t)) {
+          sec = 'gastos';
+          seccionActual = 'gastos';
+        } else if (t.trim()) {
+          partesSeccion.push({ seccion: sec, texto: t.trim() });
         }
       }
+    }
 
-      resultados.push({
-        fecha: fechaActualCursor,
-        descripcion,
-        tipo,
-        naturaleza,
-        categoria,
-        metodo_pago: metodo,
-        moneda_original: moneda,
-        monto_original: montoNum,
-      });
+    for (const parte of partesSeccion) {
+      const secItem = parte.seccion;
+      // Separar ítems por comas, punto y coma, " y ", o puntos seguidos de espacio o letra
+      const chunks = parte.texto
+        .split(/(?:[\,\;]\s+|\s+y\s+|\.\s+(?=[a-zA-Z\d]))/i)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+
+      for (const chunk of chunks) {
+        // 2. Ignorar cualquier bloque individual que diga "total" (ej: "Total: 50,33$")
+        if (/\btotal(?:es)?\b/i.test(chunk)) {
+          continue;
+        }
+
+        // 3. Aceptar montos CON o SIN unidad después de un método de pago (ej. "efectivo: 10950", "Pmovil: 52646", "6.500bs", "1$")
+        const regexMonto = /(?:\$|usd)?\s*(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+,\d+|\d+\.\d+|\d+)\s*(?:\$|usd|divisas?|dolares?|dólares?|bs|ves|bolivares|bolívares)?/i;
+        const montoMatch = chunk.match(regexMonto);
+
+        if (!montoMatch) continue;
+
+        const rawMontoStr = montoMatch[1];
+        if (!rawMontoStr) continue;
+
+        let montoNum = 0;
+        if (/^\d{1,3}(?:\.\d{3})+$/.test(rawMontoStr)) {
+          montoNum = parseFloat(rawMontoStr.replace(/\./g, ''));
+        } else if (/^\d{1,3}(?:\.\d{3})+,\d+$/.test(rawMontoStr)) {
+          montoNum = parseFloat(rawMontoStr.replace(/\./g, '').replace(',', '.'));
+        } else if (/^\d+,\d+$/.test(rawMontoStr)) {
+          montoNum = parseFloat(rawMontoStr.replace(',', '.'));
+        } else {
+          montoNum = parseFloat(rawMontoStr);
+        }
+
+        if (isNaN(montoNum) || montoNum <= 0) continue;
+        montoNum = Math.abs(montoNum);
+
+        const norm = chunk.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+        // 3. Moneda original: si no tiene "$" ni "divisa", asumir Bolívares (VES)
+        let moneda: 'VES' | 'USD' = 'VES';
+        if (norm.includes('$') || norm.includes('usd') || norm.includes('divisa') || norm.includes('dolar')) {
+          moneda = 'USD';
+        }
+
+        // Detectar método de pago
+        let metodo: 'pago_movil' | 'punto_venta' | 'efectivo_bs' | 'divisa' = 'efectivo_bs';
+        if (moneda === 'USD') {
+          metodo = 'divisa';
+        } else if (/\bpm\b|pmovil|p\s*movil|pago\s*movil|transferencia|transf|bcv|banesco|mercantil/.test(norm)) {
+          metodo = 'pago_movil';
+        } else if (/punto|pos|tarjeta|tdc|debito|biopago/.test(norm)) {
+          metodo = 'punto_venta';
+        } else if (/efectivo/.test(norm)) {
+          metodo = 'efectivo_bs';
+        }
+
+        // 4. Palabras explícitas de egreso ("gasto", "compra", "hielo", "insumo", "pago a", "-")
+        const tienePalabraEgreso =
+          /\b(?:gastos?|compras?|hielo|insumos?)\b/.test(norm) ||
+          /\bpago\s+a\b/.test(norm) ||
+          norm.includes('-') ||
+          /\b(?:leche|pasta|espagueti|azucar|canela|vainilla)\b/.test(norm) ||
+          /\b(?:vasos?|pitillos?|tapas?|bolsas?|servilletas?|empaques?)\b/.test(norm) ||
+          /\b(?:cashea|krece|cuotas?|prestamos?)\b/.test(norm) ||
+          /\b(?:hamburguesas?|empanadas?|almuerzos?|desayunos?|cenas?|comidas?|refrescos?)\b/.test(norm) ||
+          /\b(?:para\s+mi|mio|mia|ropa|regalos?|ocio|personal)\b/.test(norm) ||
+          /\b(?:recargas?|saldos?|luz|cantv|internet|servicios?)\b/.test(norm) ||
+          /\b(?:pasajes?|taxis?|gasolina|transporte|carreras?|fletes?)\b/.test(norm) ||
+          /\b(?:nominas?|sueldos?|salarios?)\b/.test(norm) ||
+          /\b(?:limpieza|cloro|jabon)\b/.test(norm);
+
+        // 4. Cualquier método de pago es SIEMPRE ingreso positivo (categoria "Ventas") salvo bajo "Gastos:" o con palabra explícita de egreso
+        let esGasto = false;
+        if (secItem === 'gastos') {
+          esGasto = true;
+        } else if (secItem === 'ventas') {
+          esGasto = false;
+        } else {
+          if (tienePalabraEgreso) {
+            esGasto = true;
+          } else {
+            esGasto = false;
+          }
+        }
+
+        let tipo: 'venta' | 'gasto' = esGasto ? 'gasto' : 'venta';
+        let categoria = 'Ventas';
+        let naturaleza: 'Negocio' | 'Personal' | 'Créditos / Otros' = 'Negocio';
+        let descripcion = chunk;
+
+        if (tipo === 'venta') {
+          categoria = 'Ventas';
+          naturaleza = 'Negocio';
+          if (metodo === 'pago_movil') descripcion = 'Venta Pago Móvil';
+          else if (metodo === 'punto_venta') descripcion = 'Venta Punto de Venta';
+          else if (metodo === 'divisa') descripcion = 'Venta Divisa';
+          else descripcion = 'Venta Efectivo Bs';
+        } else {
+          // Gasto: clasificar en las 9 categorías oficiales
+          if (/\b(?:nominas?|sueldos?|salarios?)\b/.test(norm)) {
+            categoria = 'Nómina / Sueldos';
+            naturaleza = 'Negocio';
+            descripcion = 'Nómina / Sueldos';
+          } else if (/\b(?:cashea|krece|cuotas?|prestamos?)\b/.test(norm)) {
+            categoria = 'Créditos (Cashea / Krece)';
+            naturaleza = 'Créditos / Otros';
+            descripcion = norm.includes('cashea') ? 'Cuota Cashea' : (norm.includes('krece') ? 'Cuota Krece' : 'Cuota Crédito');
+          } else if (/\b(?:leche|pasta|espagueti|azucar|canela|vainilla|materia\s*prima)\b/.test(norm)) {
+            categoria = 'Materia Prima';
+            naturaleza = 'Negocio';
+            if (norm.includes('leche condensada')) descripcion = 'Leche condensada';
+            else if (norm.includes('leche')) descripcion = 'Leche';
+            else if (norm.includes('pasta') || norm.includes('espagueti')) descripcion = 'Pasta';
+            else if (norm.includes('azucar')) descripcion = 'Azúcar';
+            else if (norm.includes('canela')) descripcion = 'Canela';
+            else descripcion = 'Materia Prima';
+          } else if (/\b(?:hamburguesas?|empanadas?|almuerzos?|desayunos?|cenas?|comidas?|refrescos?)\b/.test(norm)) {
+            categoria = 'Comidas y Bebidas';
+            naturaleza = 'Personal';
+            if (norm.includes('hamburguesa')) descripcion = 'Hamburguesa personal';
+            else if (norm.includes('empanada')) descripcion = 'Empanada personal';
+            else if (norm.includes('almuerzo')) descripcion = 'Almuerzo personal';
+            else if (norm.includes('refresco')) descripcion = 'Refresco personal';
+            else descripcion = 'Comida personal';
+          } else if (/\b(?:vasos?|pitillos?|tapas?|bolsas?|servilletas?|empaques?|insumos?)\b/.test(norm)) {
+            categoria = 'Insumos y Empaques';
+            naturaleza = 'Negocio';
+            descripcion = 'Insumos y empaques';
+          } else if (/\b(?:pasajes?|taxis?|gasolina|transporte|carreras?|fletes?)\b/.test(norm)) {
+            categoria = 'Transporte y Logística';
+            naturaleza = 'Negocio';
+            descripcion = 'Transporte / Logística';
+          } else if (/\b(?:recargas?|saldos?|luz|cantv|internet|servicios?)\b/.test(norm)) {
+            categoria = 'Recargas y Servicios';
+            naturaleza = 'Negocio';
+            descripcion = 'Recargas y Servicios';
+          } else if (/\b(?:ropa|regalos?|ocio|para\s+mi|mio|mia|personal)\b/.test(norm)) {
+            categoria = 'Personal / Ocio / Regalos';
+            naturaleza = 'Personal';
+            descripcion = 'Gasto personal / ocio';
+          } else {
+            categoria = 'Hielo y Varios Operativos';
+            naturaleza = 'Negocio';
+            descripcion = norm.includes('hielo') ? 'Hielo' : (norm.includes('limpieza') ? 'Limpieza' : 'Varios operativos');
+          }
+        }
+
+        resultados.push({
+          fecha: fechaActualCursor,
+          descripcion,
+          tipo,
+          naturaleza,
+          categoria,
+          metodo_pago: metodo,
+          moneda_original: moneda,
+          monto_original: montoNum,
+        });
+      }
     }
   }
 
@@ -307,7 +348,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
     const body = (await request.json()) as { texto?: string; fecha_actual?: string };
     const texto = body?.texto?.trim();
-    const fechaActual = body?.fecha_actual || new Date().toISOString().split('T')[0];
+    const fechaActual = body?.fecha_actual || getVenezuelaDate();
 
     if (!texto) {
       return new Response(
