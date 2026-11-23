@@ -207,7 +207,7 @@ export const ModalGestionPuestos: React.FC<Props> = ({
   const iniciarEdicion = (p: Puesto) => {
     setEditandoId(p.id);
     setEditNombre(p.nombre);
-    setEditComision(p.porcentaje_comision.toString());
+    setEditComision((p.comision_porcentaje ?? p.porcentaje_comision ?? 22).toString());
     setEditActivo(p.activo);
     setErrorMsg(null);
   };
@@ -231,6 +231,7 @@ export const ModalGestionPuestos: React.FC<Props> = ({
         actualizarPuesto({
           ...puestoOriginal,
           nombre: editNombre.trim(),
+          comision_porcentaje: comisionNum,
           porcentaje_comision: comisionNum,
           activo: editActivo,
         }),
@@ -624,7 +625,7 @@ export const ModalGestionPuestos: React.FC<Props> = ({
                           </span>
                         </div>
                         <div className="text-[11px] text-[#52525B] mt-0.5">
-                          Comisión: <span className="font-bold text-[#166534] tabular-nums font-mono">({p.porcentaje_comision}%)</span> en dólares
+                          Comisión: <span className="font-bold text-[#166534] tabular-nums font-mono">({p.comision_porcentaje ?? p.porcentaje_comision}%)</span> en dólares
                         </div>
 
                         {/* Estado del Vendedor asignado */}

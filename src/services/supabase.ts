@@ -315,10 +315,15 @@ export async function getPuestos(): Promise<Puesto[]> {
     console.warn('Aviso consultando perfiles en getPuestos:', e);
   }
 
-  return (puestosData || []).map((p) => ({
-    ...p,
-    vendedor: perfilesMap[p.id] || null,
-  }));
+  return (puestosData || []).map((p) => {
+    const comision = Number(p.comision_porcentaje ?? p.porcentaje_comision ?? 22.00);
+    return {
+      ...p,
+      comision_porcentaje: comision,
+      porcentaje_comision: comision,
+      vendedor: perfilesMap[p.id] || null,
+    };
+  });
 }
 
 export async function crearPuestoConVendedor(
@@ -378,11 +383,14 @@ export async function crearPuesto(puesto: Omit<Puesto, 'id' | 'created_at'>): Pr
     throw new Error('Supabase no está configurado en el cliente.');
   }
 
+  const comision = Number(puesto.comision_porcentaje ?? puesto.porcentaje_comision ?? 22.00);
+
   const { data, error } = await supabase
     .from('puestos')
     .insert({
       nombre: puesto.nombre,
-      porcentaje_comision: puesto.porcentaje_comision,
+      comision_porcentaje: comision,
+      porcentaje_comision: comision,
       activo: puesto.activo,
     })
     .select()
@@ -397,7 +405,12 @@ export async function crearPuesto(puesto: Omit<Puesto, 'id' | 'created_at'>): Pr
     throw new Error('No se recibió el puesto creado desde Supabase.');
   }
 
-  return data;
+  const comisionRes = Number(data.comision_porcentaje ?? data.porcentaje_comision ?? 22.00);
+  return {
+    ...data,
+    comision_porcentaje: comisionRes,
+    porcentaje_comision: comisionRes,
+  };
 }
 
 export async function actualizarPuesto(puesto: Puesto): Promise<Puesto> {
@@ -405,11 +418,14 @@ export async function actualizarPuesto(puesto: Puesto): Promise<Puesto> {
     throw new Error('Supabase no está configurado en el cliente.');
   }
 
+  const comision = Number(puesto.comision_porcentaje ?? puesto.porcentaje_comision ?? 22.00);
+
   const { data, error } = await supabase
     .from('puestos')
     .update({
       nombre: puesto.nombre,
-      porcentaje_comision: puesto.porcentaje_comision,
+      comision_porcentaje: comision,
+      porcentaje_comision: comision,
       activo: puesto.activo,
     })
     .eq('id', puesto.id)
@@ -425,7 +441,12 @@ export async function actualizarPuesto(puesto: Puesto): Promise<Puesto> {
     throw new Error('No se recibió el puesto actualizado desde Supabase.');
   }
 
-  return data;
+  const comisionRes = Number(data.comision_porcentaje ?? data.porcentaje_comision ?? 22.00);
+  return {
+    ...data,
+    comision_porcentaje: comisionRes,
+    porcentaje_comision: comisionRes,
+  };
 }
 
 export async function eliminarPuesto(id: string): Promise<boolean> {

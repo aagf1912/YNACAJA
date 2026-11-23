@@ -8,10 +8,37 @@
 CREATE TABLE IF NOT EXISTS public.puestos (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     nombre TEXT NOT NULL,
+    comision_porcentaje NUMERIC(5,2) NOT NULL DEFAULT 22.00,
     porcentaje_comision NUMERIC(5,2) NOT NULL DEFAULT 22.00,
     activo BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Asegurar columnas si la tabla ya existía
+ALTER TABLE public.puestos ADD COLUMN IF NOT EXISTS comision_porcentaje NUMERIC(5,2) DEFAULT 22.00;
+ALTER TABLE public.puestos ADD COLUMN IF NOT EXISTS porcentaje_comision NUMERIC(5,2) DEFAULT 22.00;
+ALTER TABLE public.puestos ADD COLUMN IF NOT EXISTS activo BOOLEAN NOT NULL DEFAULT true;
+
+-- Trigger para mantener sincronizadas comision_porcentaje y porcentaje_comision
+CREATE OR REPLACE FUNCTION public.sync_puestos_comision()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.comision_porcentaje IS NOT NULL THEN
+    NEW.porcentaje_comision := NEW.comision_porcentaje;
+  ELSIF NEW.porcentaje_comision IS NOT NULL THEN
+    NEW.comision_porcentaje := NEW.porcentaje_comision;
+  ELSE
+    NEW.comision_porcentaje := 22.00;
+    NEW.porcentaje_comision := 22.00;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_sync_puestos_comision
+BEFORE INSERT OR UPDATE ON public.puestos
+FOR EACH ROW
+EXECUTE FUNCTION public.sync_puestos_comision();
 
 -- 2. Crear tabla de perfiles de usuario
 CREATE TABLE IF NOT EXISTS public.perfiles (
@@ -205,7 +232,7 @@ CREATE OR REPLACE FUNCTION public.crear_puesto_con_vendedor(
     p_usuario_corto TEXT,
     p_password TEXT
 )
-RETURNS JSONB
+RETURNS JSON
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, auth, extensions
@@ -236,9 +263,9 @@ BEGIN
 
     v_email := v_usuario_limpio || '@ynacaja.app';
 
-    -- 1. Crear el puesto
-    INSERT INTO public.puestos (nombre, porcentaje_comision, activo)
-    VALUES (trim(p_nombre_puesto), p_comision, true)
+    -- 1. Crear el puesto con comision_porcentaje y porcentaje_comision
+    INSERT INTO public.puestos (nombre, comision_porcentaje, porcentaje_comision, activo)
+    VALUES (trim(p_nombre_puesto), COALESCE(p_comision, 22.00), COALESCE(p_comision, 22.00), true)
     RETURNING id INTO v_puesto_id;
 
     -- 2. Crear o actualizar usuario en auth.users
@@ -313,7 +340,7 @@ CREATE OR REPLACE FUNCTION public.asignar_vendedor_a_puesto(
     p_usuario_corto TEXT,
     p_password TEXT
 )
-RETURNS JSONB
+RETURNS JSON
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, auth, extensions
