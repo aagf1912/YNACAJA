@@ -17,9 +17,11 @@ import {
 import { Puesto } from '../types';
 import {
   getPuestos,
+  obtenerUsuariosPuestos,
   crearPuestoConVendedor,
   asignarVendedorAPuesto,
   actualizarPuesto,
+  actualizarCredencialesPuesto,
   eliminarPuesto,
 } from '../services/supabase';
 
@@ -53,6 +55,8 @@ export const ModalGestionPuestos: React.FC<Props> = ({
   onPuestosActualizados,
 }) => {
   const [listaPuestos, setListaPuestos] = useState<Puesto[]>(puestosIniciales);
+  const [puestosEmails, setPuestosEmails] = useState<Record<string, string>>({});
+
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [nuevaComision, setNuevaComision] = useState('22.00');
   const [nuevoUsuario, setNuevoUsuario] = useState('');
@@ -63,6 +67,9 @@ export const ModalGestionPuestos: React.FC<Props> = ({
   const [editNombre, setEditNombre] = useState('');
   const [editComision, setEditComision] = useState('22.00');
   const [editActivo, setEditActivo] = useState(true);
+  const [editUsuario, setEditUsuario] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+  const [mostrarEditPassword, setMostrarEditPassword] = useState(false);
 
   // Estado para asignar usuario a puesto existente
   const [puestoParaAsignar, setPuestoParaAsignar] = useState<Puesto | null>(null);
@@ -91,13 +98,43 @@ export const ModalGestionPuestos: React.FC<Props> = ({
     setCargando(true);
     setErrorMsg(null);
     try {
-      const puestosFrescos = await withTimeout(
-        getPuestos(),
-        8000,
-        'Tiempo de espera agotado (8s) al sincronizar puestos con Supabase.'
-      );
-      setListaPuestos(puestosFrescos);
-      onPuestosActualizadosRef.current?.(puestosFrescos);
+      const [puestosFrescos, emailsMap] = await Promise.all([
+        withTimeout(
+          getPuestos(),
+          8000,
+          'Tiempo de espera agotado (8s) al sincronizar puestos con Supabase.'
+        ),
+        withTimeout(
+          obtenerUsuariosPuestos(),
+          8000,
+          'Tiempo de espera agotado (8s) al consultar usuarios de puestos.'
+        ).catch((err) => {
+          console.warn('Aviso consultando obtener_usuarios_puestos:', err);
+          return {} as Record<string, string>;
+        }),
+      ]);
+
+      const puestosConEmail = puestosFrescos.map((p) => {
+        const correo = emailsMap[p.id] || p.email || p.vendedor?.email;
+        return {
+          ...p,
+          email: correo,
+          vendedor: p.vendedor
+            ? { ...p.vendedor, email: correo || p.vendedor.email }
+            : correo
+            ? {
+                id: '',
+                nombre: correo.split('@')[0],
+                usuario: correo.split('@')[0],
+                email: correo,
+              }
+            : null,
+        };
+      });
+
+      setPuestosEmails(emailsMap);
+      setListaPuestos(puestosConEmail);
+      onPuestosActualizadosRef.current?.(puestosConEmail);
     } catch (err: any) {
       console.error('Error al consultar puestos:', err);
       setErrorMsg(err?.message || 'Error de conexión o permisos al consultar puestos en Supabase.');
@@ -209,6 +246,16 @@ export const ModalGestionPuestos: React.FC<Props> = ({
     setEditNombre(p.nombre);
     setEditComision((p.comision_porcentaje ?? p.porcentaje_comision ?? 22).toString());
     setEditActivo(p.activo);
+
+    // Obtener la parte antes del @ del correo actual asignado
+    const correoActual = puestosEmails[p.id] || p.email || p.vendedor?.email || '';
+    const usuarioActual = correoActual
+      ? correoActual.split('@')[0]
+      : (p.vendedor?.usuario || p.vendedor?.nombre || '').toLowerCase().replace(/[@].*$/, '');
+
+    setEditUsuario(limpiarUsuario(usuarioActual));
+    setEditPassword('');
+    setMostrarEditPassword(false);
     setErrorMsg(null);
   };
 
@@ -224,9 +271,24 @@ export const ModalGestionPuestos: React.FC<Props> = ({
       return;
     }
 
+    const usuarioLimpio = limpiarUsuario(editUsuario);
+    const passwordTrim = editPassword.trim();
+
+    if (passwordTrim && passwordTrim.length < 6) {
+      setErrorMsg('La nueva contraseña debe tener al menos 6 caracteres (o dejarse vacía para mantener la actual).');
+      return;
+    }
+
+    const emailPrevio = puestosEmails[puestoOriginal.id] || puestoOriginal.email || puestoOriginal.vendedor?.email;
+    if (!emailPrevio && usuarioLimpio && !passwordTrim) {
+      setErrorMsg('Para asignar un nuevo usuario a este puesto por primera vez, ingresá una contraseña de al menos 6 caracteres.');
+      return;
+    }
+
     setGuardando(true);
     setErrorMsg(null);
     try {
+      // 1. Actualizar datos base del puesto
       await withTimeout(
         actualizarPuesto({
           ...puestoOriginal,
@@ -239,8 +301,24 @@ export const ModalGestionPuestos: React.FC<Props> = ({
         'Tiempo de espera agotado (8s) al actualizar el puesto en Supabase.'
       );
 
+      // 2. Si se ingresó usuario o nueva contraseña, llamar a actualizar_credenciales_puesto
+      if (usuarioLimpio || passwordTrim) {
+        await withTimeout(
+          actualizarCredencialesPuesto(
+            puestoOriginal.id,
+            usuarioLimpio,
+            passwordTrim || null
+          ),
+          8000,
+          'Tiempo de espera agotado (8s) al actualizar credenciales en Supabase.'
+        );
+      }
+
       await cargarPuestos();
       setEditandoId(null);
+      setEditUsuario('');
+      setEditPassword('');
+      setMostrarEditPassword(false);
     } catch (err: any) {
       console.error('Error al actualizar puesto:', err);
       setErrorMsg(err?.message || 'Error al actualizar el puesto en Supabase.');
@@ -533,8 +611,15 @@ export const ModalGestionPuestos: React.FC<Props> = ({
                     return (
                       <div
                         key={p.id}
-                        className="p-3 bg-[#F4F4F5] border border-[#2C474E] rounded-lg space-y-2"
+                        className="p-3 bg-[#F4F4F5] border-2 border-[#2C474E] rounded-lg space-y-2.5"
                       >
+                        <div className="flex items-center justify-between pb-1 border-b border-zinc-200">
+                          <span className="text-xs font-bold text-[#2C474E] flex items-center gap-1.5">
+                            <Pencil size={13} />
+                            Editando Puesto: {p.nombre}
+                          </span>
+                        </div>
+
                         <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
                           <div className="sm:col-span-6">
                             <label className="block text-[10px] font-bold text-[#52525B] uppercase mb-0.5">
@@ -577,10 +662,74 @@ export const ModalGestionPuestos: React.FC<Props> = ({
                           </div>
                         </div>
 
+                        {/* Credenciales de Acceso */}
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 pt-1 border-t border-zinc-200">
+                          {/* Campo Usuario de acceso */}
+                          <div className="sm:col-span-6">
+                            <label className="block text-[10px] font-bold text-[#52525B] uppercase mb-0.5">
+                              Usuario de acceso
+                            </label>
+                            <div className="flex rounded border border-[#E4E4E7] overflow-hidden focus-within:border-[#2C474E] bg-white">
+                              <input
+                                type="text"
+                                value={editUsuario}
+                                onChange={(e) => setEditUsuario(limpiarUsuario(e.target.value))}
+                                disabled={guardando}
+                                placeholder="ej. puesto1"
+                                className="w-full px-2 py-1 bg-transparent text-xs font-mono text-[#18181B] outline-none"
+                              />
+                              <span className="bg-[#F4F4F5] border-l border-[#E4E4E7] px-2 py-1 text-[11px] text-[#71717A] font-mono select-none flex items-center">
+                                @ynacaja.app
+                              </span>
+                            </div>
+                            {editUsuario ? (
+                              <p className="text-[10px] text-zinc-500 font-mono mt-0.5">
+                                Correo: {limpiarUsuario(editUsuario)}@ynacaja.app
+                              </p>
+                            ) : null}
+                          </div>
+
+                          {/* Campo Nueva contraseña */}
+                          <div className="sm:col-span-6">
+                            <label className="block text-[10px] font-bold text-[#52525B] uppercase mb-0.5">
+                              Nueva contraseña <span className="font-normal text-zinc-500 normal-case">(dejar vacío para mantener la actual)</span>
+                            </label>
+                            <div className="relative">
+                              <input
+                                type={mostrarEditPassword ? 'text' : 'password'}
+                                value={editPassword}
+                                onChange={(e) => setEditPassword(e.target.value)}
+                                disabled={guardando}
+                                placeholder="Dejar vacío para mantener la actual"
+                                className="w-full px-2 py-1 pr-8 border border-[#E4E4E7] rounded bg-white text-xs font-mono text-[#18181B]"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setMostrarEditPassword(!mostrarEditPassword)}
+                                className="absolute right-2 top-1.5 text-zinc-400 hover:text-zinc-600"
+                                tabIndex={-1}
+                                title={mostrarEditPassword ? 'Ocultar contraseña' : 'Ver contraseña'}
+                              >
+                                {mostrarEditPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+                              </button>
+                            </div>
+                            {editPassword && editPassword.length > 0 && editPassword.length < 6 && (
+                              <p className="text-[10px] text-amber-600 mt-0.5">
+                                Mínimo 6 caracteres
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
                         <div className="flex justify-end gap-2 pt-1 border-t border-zinc-200">
                           <button
                             type="button"
-                            onClick={() => setEditandoId(null)}
+                            onClick={() => {
+                              setEditandoId(null);
+                              setEditUsuario('');
+                              setEditPassword('');
+                              setMostrarEditPassword(false);
+                            }}
                             disabled={guardando}
                             className="px-2.5 py-1 text-xs border border-zinc-300 rounded bg-white hover:bg-zinc-100"
                           >
@@ -628,34 +777,47 @@ export const ModalGestionPuestos: React.FC<Props> = ({
                           Comisión: <span className="font-bold text-[#166534] tabular-nums font-mono">({p.comision_porcentaje ?? p.porcentaje_comision}%)</span> en dólares
                         </div>
 
-                        {/* Estado del Vendedor asignado */}
-                        {p.vendedor ? (
-                          <div className="flex items-center gap-1 text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded mt-1.5 w-fit">
-                            <User size={12} className="text-emerald-700 shrink-0" />
-                            <span>
-                              Usuario: <strong>{p.vendedor.usuario || p.vendedor.nombre}</strong>
-                              <span className="text-zinc-500 font-mono text-[10px]"> (@ynacaja.app)</span>
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                            <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-medium">
-                              Sin usuario asignado
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPuestoParaAsignar(p);
-                                setAsignarUsuario(limpiarUsuario(p.nombre));
-                                setAsignarPassword('');
-                              }}
-                              className="text-[11px] font-bold text-[#2C474E] hover:text-[#1b2c30] bg-[#2C474E]/10 hover:bg-[#2C474E]/20 px-2 py-0.5 rounded transition-colors inline-flex items-center gap-1"
-                            >
-                              <UserPlus size={12} />
-                              <span>+ Asignar usuario</span>
-                            </button>
-                          </div>
-                        )}
+                        {/* Estado del Vendedor asignado / Correo */}
+                        {(() => {
+                          const emailAsignado = puestosEmails[p.id] || p.email || p.vendedor?.email;
+                          const usuarioAsignado = emailAsignado
+                            ? emailAsignado.split('@')[0]
+                            : p.vendedor?.usuario || p.vendedor?.nombre;
+
+                          if (emailAsignado || p.vendedor) {
+                            return (
+                              <div className="flex items-center gap-1.5 text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded mt-1.5 w-fit">
+                                <User size={12} className="text-emerald-700 shrink-0" />
+                                <span>
+                                  Usuario: <strong className="font-mono">{usuarioAsignado}</strong>
+                                  <span className="text-zinc-600 font-mono text-[10px] ml-1">
+                                    ({emailAsignado || `${usuarioAsignado}@ynacaja.app`})
+                                  </span>
+                                </span>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                              <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-medium">
+                                Sin usuario asignado
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPuestoParaAsignar(p);
+                                  setAsignarUsuario(limpiarUsuario(p.nombre));
+                                  setAsignarPassword('');
+                                }}
+                                className="text-[11px] font-bold text-[#2C474E] hover:text-[#1b2c30] bg-[#2C474E]/10 hover:bg-[#2C474E]/20 px-2 py-0.5 rounded transition-colors inline-flex items-center gap-1"
+                              >
+                                <UserPlus size={12} />
+                                <span>+ Asignar usuario</span>
+                              </button>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       <div className="flex items-center gap-1">

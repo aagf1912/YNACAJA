@@ -25,6 +25,7 @@ export interface Puesto {
   comision_porcentaje?: number;
   activo: boolean;
   created_at?: string;
+  email?: string;
   vendedor?: {
     id: string;
     nombre?: string;

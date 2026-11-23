@@ -315,15 +315,92 @@ export async function getPuestos(): Promise<Puesto[]> {
     console.warn('Aviso consultando perfiles en getPuestos:', e);
   }
 
+  // Intentar obtener correos de puestos vía RPC obtener_usuarios_puestos
+  try {
+    const { data: rpcUsuarios } = await supabase.rpc('obtener_usuarios_puestos');
+    if (Array.isArray(rpcUsuarios)) {
+      for (const item of rpcUsuarios) {
+        if (item.puesto_id && item.email) {
+          const perf = perfilesMap[item.puesto_id];
+          if (!perf) {
+            perfilesMap[item.puesto_id] = {
+              id: '',
+              nombre: item.email.split('@')[0],
+              usuario: item.email.split('@')[0],
+              email: item.email,
+            };
+          } else {
+            perf.email = item.email;
+            if (!perf.usuario || perf.usuario.startsWith('Vendedor -')) {
+              perf.usuario = item.email.split('@')[0];
+            }
+          }
+        }
+      }
+    }
+  } catch (eRpc) {
+    console.warn('Aviso consultando obtener_usuarios_puestos en getPuestos:', eRpc);
+  }
+
   return (puestosData || []).map((p) => {
     const comision = Number(p.comision_porcentaje ?? p.porcentaje_comision ?? 22.00);
+    const vendedor = perfilesMap[p.id] || null;
     return {
       ...p,
       comision_porcentaje: comision,
       porcentaje_comision: comision,
-      vendedor: perfilesMap[p.id] || null,
+      email: vendedor?.email,
+      vendedor,
     };
   });
+}
+
+export async function obtenerUsuariosPuestos(): Promise<Record<string, string>> {
+  if (!supabase) return {};
+  try {
+    const { data, error } = await supabase.rpc('obtener_usuarios_puestos');
+    if (error) {
+      console.warn('Aviso RPC obtener_usuarios_puestos:', error);
+      return {};
+    }
+    const map: Record<string, string> = {};
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (item.puesto_id && item.email) {
+          map[item.puesto_id] = item.email;
+        }
+      }
+    }
+    return map;
+  } catch (err) {
+    console.warn('Excepción en obtenerUsuariosPuestos:', err);
+    return {};
+  }
+}
+
+export async function actualizarCredencialesPuesto(
+  puestoId: string,
+  usuarioCorto: string,
+  nuevaPassword?: string | null
+): Promise<any> {
+  if (!supabase) {
+    throw new Error('Supabase no está configurado en el cliente.');
+  }
+
+  const usuarioLimpio = usuarioCorto.trim().toLowerCase().replace(/[@].*$/, '').replace(/[^a-z0-9._-]/g, '');
+
+  const { data, error } = await supabase.rpc('actualizar_credenciales_puesto', {
+    p_puesto_id: puestoId,
+    p_usuario_corto: usuarioLimpio,
+    p_nueva_password: nuevaPassword && nuevaPassword.trim() ? nuevaPassword.trim() : null,
+  });
+
+  if (error) {
+    console.error('Error RPC actualizar_credenciales_puesto:', error);
+    throw new Error(error.message || 'Error al actualizar credenciales del puesto en Supabase.');
+  }
+
+  return data;
 }
 
 export async function crearPuestoConVendedor(

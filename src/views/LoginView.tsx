@@ -41,9 +41,24 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess }) => {
       });
 
       if (error) {
-        setErrorMsg(error.message === 'Invalid login credentials'
-          ? 'Correo o contraseña incorrectos. Verifica tus datos.'
-          : error.message);
+        const errorDescription = (error as any)?.error_description;
+        let strObj = '';
+        try {
+          const s = JSON.stringify(error);
+          if (s && s !== '{}') strObj = s;
+        } catch {}
+
+        const mensajeCrudo =
+          (error?.message && error.message !== '{}' ? error.message : null) ||
+          errorDescription ||
+          strObj ||
+          'Error al iniciar sesión';
+
+        setErrorMsg(
+          mensajeCrudo === 'Invalid login credentials'
+            ? 'Correo o contraseña incorrectos. Verifica tus datos.'
+            : mensajeCrudo
+        );
         setCargando(false);
         return;
       }
@@ -52,7 +67,17 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess }) => {
         onLoginSuccess();
       }
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Error de conexión al iniciar sesión.');
+      let strErr = '';
+      try {
+        const s = JSON.stringify(err);
+        if (s && s !== '{}') strErr = s;
+      } catch {}
+      const fallbackMsg =
+        (err?.message && err.message !== '{}' ? err.message : null) ||
+        err?.error_description ||
+        strErr ||
+        'Error al iniciar sesión';
+      setErrorMsg(fallbackMsg);
     } finally {
       setCargando(false);
     }

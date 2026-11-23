@@ -442,5 +442,98 @@ BEGIN
 END;
 $$;
 
+-- 8. Actualizar credenciales de puesto (modificar usuario y/o contraseña)
+CREATE OR REPLACE FUNCTION public.actualizar_credenciales_puesto(
+    p_puesto_id UUID,
+    p_usuario_corto TEXT,
+    p_nueva_password TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'auth', 'extensions'
+AS $$
+DECLARE
+    v_user_id UUID;
+    v_email TEXT;
+    v_usuario_limpio TEXT;
+    v_nombre_puesto TEXT;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM public.perfiles WHERE id = auth.uid() AND rol = 'admin') THEN
+        RAISE EXCEPTION 'Solo el administrador puede modificar credenciales.';
+    END IF;
+
+    SELECT nombre INTO v_nombre_puesto FROM public.puestos WHERE id = p_puesto_id;
+    IF v_nombre_puesto IS NULL THEN
+        RAISE EXCEPTION 'El puesto no existe.';
+    END IF;
+
+    v_usuario_limpio := lower(trim(regexp_replace(p_usuario_corto, '@.*$', '')));
+    IF v_usuario_limpio = '' THEN
+        RAISE EXCEPTION 'El usuario no puede estar vacío.';
+    END IF;
+    v_email := v_usuario_limpio || '@ynacaja.app';
+
+    IF p_nueva_password IS NOT NULL AND trim(p_nueva_password) <> '' AND length(trim(p_nueva_password)) < 6 THEN
+        RAISE EXCEPTION 'La nueva contraseña debe tener al menos 6 caracteres.';
+    END IF;
+
+    SELECT id INTO v_user_id FROM public.perfiles WHERE puesto_id = p_puesto_id AND rol = 'vendedor' LIMIT 1;
+
+    -- Si el puesto todavía no tenía vendedor asignado, lo crea
+    IF v_user_id IS NULL THEN
+        IF p_nueva_password IS NULL OR length(trim(p_nueva_password)) < 6 THEN
+            RAISE EXCEPTION 'Ingresá una contraseña de al menos 6 caracteres para crear el usuario.';
+        END IF;
+        RETURN public.asignar_vendedor_a_puesto(p_puesto_id, v_usuario_limpio, trim(p_nueva_password));
+    END IF;
+
+    -- Verificar que el nuevo correo no esté ocupado por otro usuario
+    IF EXISTS (SELECT 1 FROM auth.users WHERE email = v_email AND id <> v_user_id) THEN
+        RAISE EXCEPTION 'El usuario % ya está en uso por otro puesto.', v_email;
+    END IF;
+
+    UPDATE auth.users
+    SET
+        email = v_email,
+        encrypted_password = CASE
+            WHEN p_nueva_password IS NOT NULL AND trim(p_nueva_password) <> ''
+            THEN crypt(trim(p_nueva_password), gen_salt('bf'))
+            ELSE encrypted_password
+        END,
+        updated_at = now()
+    WHERE id = v_user_id;
+
+    UPDATE auth.identities
+    SET
+        identity_data = jsonb_build_object('sub', v_user_id::text, 'email', v_email),
+        updated_at = now()
+    WHERE user_id = v_user_id AND provider = 'email';
+
+    UPDATE public.perfiles
+    SET nombre = 'Vendedor - ' || v_nombre_puesto,
+        usuario = v_usuario_limpio,
+        email = v_email
+    WHERE id = v_user_id;
+
+    RETURN json_build_object('puesto_id', p_puesto_id, 'user_id', v_user_id, 'email', v_email, 'usuario', v_usuario_limpio);
+END;
+$$;
+
+-- 9. Obtener usuarios y correos de puestos (solo admin)
+CREATE OR REPLACE FUNCTION public.obtener_usuarios_puestos()
+RETURNS TABLE(puesto_id UUID, email TEXT)
+LANGUAGE sql
+STABLE SECURITY DEFINER
+SET search_path TO 'public', 'auth'
+AS $$
+    SELECT p.puesto_id, u.email::TEXT
+    FROM public.perfiles p
+    JOIN auth.users u ON u.id = p.id
+    WHERE p.puesto_id IS NOT NULL AND public.es_admin();
+$$;
+
 GRANT EXECUTE ON FUNCTION public.crear_puesto_con_vendedor(TEXT, NUMERIC, TEXT, TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.asignar_vendedor_a_puesto(UUID, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.actualizar_credenciales_puesto(UUID, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.obtener_usuarios_puestos() TO authenticated;
