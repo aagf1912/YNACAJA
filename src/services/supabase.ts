@@ -12,7 +12,13 @@ const isConfigured = Boolean(
 );
 
 export const supabase = isConfigured
-  ? createClient(supabaseUrl, supabaseAnonKey)
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        lock: async (_name, _acquireTimeout, fn) => await fn(),
+        persistSession: true,
+        autoRefreshToken: true,
+      },
+    })
   : null;
 
 // Claves de respaldo en localStorage únicamente para contingencia de red en balance y config

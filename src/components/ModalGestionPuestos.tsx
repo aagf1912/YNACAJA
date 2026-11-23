@@ -11,12 +11,12 @@ interface Props {
 }
 
 /**
- * Envoltorio para garantizar timeout de 10 segundos en cualquier petición asíncrona
+ * Envoltorio para garantizar timeout de 8 segundos en cualquier petición asíncrona
  */
 function withTimeout<T>(
   promise: Promise<T>,
-  ms: number = 10000,
-  mensajeError: string = 'Tiempo de espera agotado (10s) al conectar con Supabase. Revisa tu conexión a internet o los permisos.'
+  ms: number = 8000,
+  mensajeError: string = 'Tiempo de espera agotado (8s) al conectar con Supabase. Revisa tu conexión a internet o los permisos.'
 ): Promise<T> {
   return Promise.race([
     promise,
@@ -44,15 +44,15 @@ export const ModalGestionPuestos: React.FC<Props> = ({
   const [guardando, setGuardando] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Consultar directamente desde Supabase con timeout de 10s y try/catch/finally garantizado
+  // Consultar directamente desde Supabase con timeout de 8s y try/catch/finally garantizado
   const recargarPuestosDirecto = useCallback(async () => {
     setCargando(true);
     setErrorMsg(null);
     try {
       const puestosFrescos = await withTimeout(
         getPuestos(),
-        10000,
-        'Tiempo de espera agotado (10s) al sincronizar puestos con Supabase.'
+        8000,
+        'Tiempo de espera agotado (8s) al sincronizar puestos con Supabase.'
       );
       setListaPuestos(puestosFrescos);
       onPuestosActualizados(puestosFrescos);
@@ -99,8 +99,8 @@ export const ModalGestionPuestos: React.FC<Props> = ({
           porcentaje_comision: comisionNum,
           activo: true,
         }),
-        10000,
-        'Tiempo de espera agotado (10s) al guardar el nuevo puesto en Supabase.'
+        8000,
+        'Tiempo de espera agotado (8s) al guardar el nuevo puesto en Supabase.'
       );
 
       await recargarPuestosDirecto();
@@ -145,8 +145,8 @@ export const ModalGestionPuestos: React.FC<Props> = ({
           porcentaje_comision: comisionNum,
           activo: editActivo,
         }),
-        10000,
-        'Tiempo de espera agotado (10s) al actualizar el puesto en Supabase.'
+        8000,
+        'Tiempo de espera agotado (8s) al actualizar el puesto en Supabase.'
       );
 
       await recargarPuestosDirecto();
@@ -171,8 +171,8 @@ export const ModalGestionPuestos: React.FC<Props> = ({
     try {
       await withTimeout(
         eliminarPuesto(p.id),
-        10000,
-        'Tiempo de espera agotado (10s) al eliminar el puesto en Supabase.'
+        8000,
+        'Tiempo de espera agotado (8s) al eliminar el puesto en Supabase.'
       );
 
       await recargarPuestosDirecto();
