@@ -1,5 +1,5 @@
 // Cloudflare Pages Function: functions/api/analizar.ts
-// Backend serverless para analizar texto de ventas y gastos de Chicha Adictiva usando Gemini 3.8 Flash
+// Backend serverless para analizar texto de ventas y gastos de Chicha Adictiva usando Gemini con reintentos y fallback dinámico
 
 interface Env {
   GEMINI_API_KEY: string;
@@ -11,52 +11,107 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
+const TIMEOUT_MS = 15000;
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function llamarGeminiConReintentos(
+/**
+ * Ejecuta una petición directa a generateContent con timeout de 15s
+ */
+async function ejecutarLlamadaGemini(
   modelo: string,
   apiKey: string,
   payload: any
 ): Promise<{ ok: boolean; status: number; text: string; data?: any }> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`;
-  const maxIntentos = 3; // Intento inicial + hasta 2 reintentos (3 intentos totales)
-  let ultimoStatus = 0;
-  let ultimoTexto = '';
+  const modelClean = modelo.replace(/^models\//, '');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelClean}:generateContent?key=${apiKey}`;
 
-  for (let intento = 1; intento <= maxIntentos; intento++) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
 
-      if (res.ok) {
-        const data = await res.json();
-        return { ok: true, status: res.status, text: '', data };
-      }
-
-      ultimoStatus = res.status;
-      ultimoTexto = await res.text();
-
-      // Si es saturación (429 Too Many Requests o 503 Service Unavailable) y no es el último intento, esperar 1.5s
-      if ((res.status === 429 || res.status === 503) && intento < maxIntentos) {
-        await delay(1500);
-        continue;
-      }
-
-      // Si es otro error de cliente (ej. 400), no tiene sentido reintentar
-      return { ok: false, status: res.status, text: ultimoTexto };
-    } catch (e: any) {
-      ultimoStatus = 500;
-      ultimoTexto = e?.message || 'Error de conexión';
-      if (intento < maxIntentos) {
-        await delay(1500);
-      }
+    if (res.ok) {
+      const data = await res.json();
+      return { ok: true, status: res.status, text: '', data };
     }
+
+    const text = await res.text();
+    return { ok: false, status: res.status, text };
+  } catch (err: any) {
+    const isTimeout = err?.name === 'TimeoutError' || err?.message?.toLowerCase().includes('timeout');
+    return {
+      ok: false,
+      status: isTimeout ? 504 : 500,
+      text: err?.message || 'Error de conexión / Timeout',
+    };
+  }
+}
+
+/**
+ * Llama a Gemini con hasta N reintentos si responde 503 o 429
+ */
+async function llamarConReintentos(
+  modelo: string,
+  apiKey: string,
+  payload: any,
+  maxReintentos: number = 3,
+  delayMs: number = 2000
+): Promise<{ ok: boolean; status: number; text: string; data?: any }> {
+  let resultado = await ejecutarLlamadaGemini(modelo, apiKey, payload);
+
+  for (let r = 1; r <= maxReintentos; r++) {
+    // Si respondió OK o el error NO es 429 ni 503, no reintentamos
+    if (resultado.ok || (resultado.status !== 429 && resultado.status !== 503)) {
+      break;
+    }
+    await delay(delayMs);
+    resultado = await ejecutarLlamadaGemini(modelo, apiKey, payload);
   }
 
-  return { ok: false, status: ultimoStatus, text: ultimoTexto };
+  return resultado;
+}
+
+/**
+ * Consulta la lista de modelos de Gemini y devuelve el primer modelo
+ * disponible que contenga "flash" y soporte "generateContent"
+ */
+async function obtenerPrimerModeloFlashDisponible(apiKey: string): Promise<string | null> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+
+    if (!res.ok) {
+      return null;
+    }
+
+    const data = (await res.json()) as {
+      models?: Array<{ name: string; supportedGenerationMethods?: string[] }>;
+    };
+    const models = data?.models || [];
+
+    // Elegir el primer modelo disponible que contenga "flash" y soporte "generateContent"
+    const match = models.find((m) => {
+      const name = (m.name || '').toLowerCase();
+      const supportsGen = Array.isArray(m.supportedGenerationMethods)
+        ? m.supportedGenerationMethods.includes('generateContent')
+        : false;
+      return name.includes('flash') && supportsGen;
+    });
+
+    if (match) {
+      return match.name.replace(/^models\//, '');
+    }
+  } catch (err) {
+    console.warn('Error listando modelos disponibles de Gemini:', err);
+  }
+  return null;
 }
 
 export const onRequestOptions: PagesFunction = async () => {
@@ -78,7 +133,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       );
     }
 
-    const body = await request.json() as { texto?: string; fecha_actual?: string };
+    const body = (await request.json()) as { texto?: string; fecha_actual?: string };
     const texto = body?.texto?.trim();
     const fechaActual = body?.fecha_actual || new Date().toISOString().split('T')[0];
 
@@ -200,12 +255,18 @@ Reglas estrictas de clasificación:
       },
     };
 
-    // 1. Intentar con modelo principal gemini-3.8-flash (con hasta 2 reintentos ante 429/503 con 1.5s de espera)
-    let geminiResultado = await llamarGeminiConReintentos('gemini-3.8-flash', apiKey, payload);
+    // 1. Usar gemini-3.8-flash como modelo principal con hasta 3 reintentos esperando 2s ante 503 o 429
+    let geminiResultado = await llamarConReintentos('gemini-3.8-flash', apiKey, payload, 3, 2000);
 
-    // 2. Si falló por saturación (429 Too Many Requests o 503 Service Unavailable), fallback al modelo gemini-3.8-flash-lite
-    if (!geminiResultado.ok && (geminiResultado.status === 429 || geminiResultado.status === 503)) {
-      geminiResultado = await llamarGeminiConReintentos('gemini-3.8-flash-lite', apiKey, payload);
+    // 2. Si después de los reintentos sigue fallando o da 404, consultar la lista de modelos disponibles
+    if (!geminiResultado.ok) {
+      console.warn(`Modelo principal gemini-3.8-flash falló (${geminiResultado.status}). Buscando modelo Flash disponible...`);
+      const modeloFallback = await obtenerPrimerModeloFlashDisponible(apiKey);
+
+      if (modeloFallback && modeloFallback !== 'gemini-3.8-flash') {
+        console.info(`Ejecutando petición con modelo fallback: ${modeloFallback}`);
+        geminiResultado = await llamarConReintentos(modeloFallback, apiKey, payload, 2, 2000);
+      }
     }
 
     if (!geminiResultado.ok) {
