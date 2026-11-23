@@ -14,10 +14,16 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !password.trim()) {
-      setErrorMsg('Por favor ingresa tu correo y contraseña.');
+    const rawEmail = email.trim();
+    if (!rawEmail || !password.trim()) {
+      setErrorMsg('Por favor ingresa tu usuario o correo y contraseña.');
       return;
     }
+
+    // Si el texto ingresado no contiene "@", concatenar automáticamente "@ynacaja.app"
+    const emailFinal = rawEmail.includes('@')
+      ? rawEmail
+      : `${rawEmail.toLowerCase()}@ynacaja.app`;
 
     setCargando(true);
     setErrorMsg(null);
@@ -30,7 +36,7 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess }) => {
 
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+        email: emailFinal,
         password: password.trim(),
       });
 
@@ -80,20 +86,26 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess }) => {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-[#52525B] mb-1">
-                Correo Electrónico
+                Usuario o Correo Electrónico
               </label>
               <div className="relative">
                 <Mail size={16} className="absolute left-3 top-3 text-[#A1A1AA]" />
                 <input
-                  type="email"
+                  type="text"
                   required
-                  autoComplete="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="ejemplo@chichaadictiva.com"
+                  placeholder="Ej. puesto1 o correo@ejemplo.com"
                   className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-[#E4E4E7] rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E]"
                 />
               </div>
+              {email.trim() && !email.includes('@') && (
+                <p className="text-[11px] text-zinc-500 mt-1 font-mono">
+                  Acceso como: <span className="text-[#2C474E] font-bold">{email.trim().toLowerCase()}@ynacaja.app</span>
+                </p>
+              )}
             </div>
 
             <div>

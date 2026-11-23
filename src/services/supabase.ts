@@ -5,8 +5,15 @@ import { ConfigNegocio, Movimiento, PerfilUsuario, Puesto, RolUsuario } from '..
 const FALLBACK_SUPABASE_URL = 'https://xbjywyzuhtbmuusytsty.supabase.co';
 const FALLBACK_SUPABASE_ANON_KEY = 'sb_publishable_ZuesPOgbvmZ7dVHgfd46_Q_HShdR3L7';
 
-const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim() || FALLBACK_SUPABASE_URL;
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim() || FALLBACK_SUPABASE_ANON_KEY;
+// Limpieza estricta de espacios, saltos de línea y comillas accidentales (Cloudflare Pages)
+const cleanEnv = (val: unknown, fallback: string): string => {
+  if (typeof val !== 'string') return fallback;
+  const cleaned = val.trim().replace(/^["']|["']$/g, '').trim();
+  return cleaned || fallback;
+};
+
+const supabaseUrl = cleanEnv(import.meta.env.VITE_SUPABASE_URL, FALLBACK_SUPABASE_URL);
+const supabaseAnonKey = cleanEnv(import.meta.env.VITE_SUPABASE_ANON_KEY, FALLBACK_SUPABASE_ANON_KEY);
 
 const isConfigured = Boolean(
   supabaseUrl &&
@@ -256,17 +263,114 @@ export async function getPuestos(): Promise<Puesto[]> {
     return [];
   }
 
-  const { data, error } = await supabase
+  const { data: puestosData, error: puestosError } = await supabase
     .from('puestos')
     .select('*')
     .order('created_at', { ascending: true });
 
-  if (error) {
-    console.error('Error al consultar puestos:', error);
-    throw new Error(`Error al consultar puestos en Supabase: ${error.message} (Código: ${error.code || 'N/A'})`);
+  if (puestosError) {
+    console.error('Error al consultar puestos:', puestosError);
+    throw new Error(`Error al consultar puestos en Supabase: ${puestosError.message} (Código: ${puestosError.code || 'N/A'})`);
   }
 
-  return data || [];
+  // Consultar perfiles para identificar qué vendedor está asignado a cada puesto
+  const perfilesMap: Record<string, { id: string; nombre: string; usuario?: string; email?: string }> = {};
+  try {
+    const { data: perfilesData, error: perfilesError } = await supabase
+      .from('perfiles')
+      .select('id, nombre, rol, puesto_id, usuario, email')
+      .eq('rol', 'vendedor');
+
+    if (!perfilesError && perfilesData) {
+      for (const perf of perfilesData) {
+        if (perf.puesto_id) {
+          perfilesMap[perf.puesto_id] = {
+            id: perf.id,
+            nombre: perf.nombre,
+            usuario: (perf as any).usuario || perf.nombre,
+            email: (perf as any).email || undefined,
+          };
+        }
+      }
+    } else if (perfilesError) {
+      // Reintentar sin columnas opcionales usuario/email si aún no se han creado en Supabase
+      const { data: fallbackData } = await supabase
+        .from('perfiles')
+        .select('id, nombre, rol, puesto_id')
+        .eq('rol', 'vendedor');
+
+      if (fallbackData) {
+        for (const perf of fallbackData) {
+          if (perf.puesto_id) {
+            perfilesMap[perf.puesto_id] = {
+              id: perf.id,
+              nombre: perf.nombre,
+              usuario: perf.nombre,
+            };
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Aviso consultando perfiles en getPuestos:', e);
+  }
+
+  return (puestosData || []).map((p) => ({
+    ...p,
+    vendedor: perfilesMap[p.id] || null,
+  }));
+}
+
+export async function crearPuestoConVendedor(
+  nombrePuesto: string,
+  comision: number,
+  usuarioCorto: string,
+  password: string
+): Promise<any> {
+  if (!supabase) {
+    throw new Error('Supabase no está configurado en el cliente.');
+  }
+
+  const usuarioLimpio = usuarioCorto.trim().toLowerCase().replace(/[@].*$/, '').replace(/[^a-z0-9._-]/g, '');
+
+  const { data, error } = await supabase.rpc('crear_puesto_con_vendedor', {
+    p_nombre_puesto: nombrePuesto.trim(),
+    p_comision: comision,
+    p_usuario_corto: usuarioLimpio,
+    p_password: password,
+  });
+
+  if (error) {
+    console.error('Error RPC crear_puesto_con_vendedor:', error);
+    throw new Error(error.message || 'Error al crear puesto con vendedor en Supabase.');
+  }
+
+  return data;
+}
+
+export async function asignarVendedorAPuesto(
+  puestoId: string,
+  usuarioCorto: string,
+  password: string
+): Promise<any> {
+  if (!supabase) {
+    throw new Error('Supabase no está configurado en el cliente.');
+  }
+
+  const usuarioLimpio = usuarioCorto.trim().toLowerCase().replace(/[@].*$/, '').replace(/[^a-z0-9._-]/g, '');
+
+  const { data, error } = await supabase.rpc('asignar_vendedor_a_puesto', {
+    p_puesto_id: puestoId,
+    p_usuario_corto: usuarioLimpio,
+    p_password: password,
+  });
+
+  if (error) {
+    console.error('Error RPC asignar_vendedor_a_puesto:', error);
+    throw new Error(error.message || 'Error al asignar vendedor al puesto en Supabase.');
+  }
+
+  return data;
 }
 
 export async function crearPuesto(puesto: Omit<Puesto, 'id' | 'created_at'>): Promise<Puesto> {

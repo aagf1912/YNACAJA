@@ -189,3 +189,231 @@ CREATE POLICY "Vendedor actualizacion ventas hoy" ON public.movimientos
         AND puesto_id IS NOT NULL
         AND puesto_id = public.get_auth_puesto_id()
     );
+
+-- ======================================================================
+-- 7. Funciones RPC para crear y asignar vendedores a puestos (sin cerrar sesión de admin)
+-- ======================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
+
+-- Agregar columnas usuario y email a perfiles si no existen
+ALTER TABLE public.perfiles ADD COLUMN IF NOT EXISTS usuario TEXT;
+ALTER TABLE public.perfiles ADD COLUMN IF NOT EXISTS email TEXT;
+
+CREATE OR REPLACE FUNCTION public.crear_puesto_con_vendedor(
+    p_nombre_puesto TEXT,
+    p_comision NUMERIC,
+    p_usuario_corto TEXT,
+    p_password TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, extensions
+AS $$
+DECLARE
+    v_usuario_limpio TEXT;
+    v_email TEXT;
+    v_puesto_id UUID;
+    v_user_id UUID;
+    v_encrypted_pw TEXT;
+BEGIN
+    -- Validar que quien ejecuta sea admin
+    IF public.get_auth_role() != 'admin' THEN
+        RAISE EXCEPTION 'Solo los administradores pueden crear puestos con usuario.';
+    END IF;
+
+    -- Limpiar usuario corto (quitar espacios, arrobas, dominios)
+    v_usuario_limpio := lower(trim(regexp_replace(p_usuario_corto, '[@].*$', '')));
+    v_usuario_limpio := regexp_replace(v_usuario_limpio, '[^a-z0-9._-]', '', 'g');
+
+    IF length(v_usuario_limpio) < 2 THEN
+        RAISE EXCEPTION 'El usuario debe tener al menos 2 caracteres alfanuméricos.';
+    END IF;
+
+    IF length(p_password) < 6 THEN
+        RAISE EXCEPTION 'La contraseña debe tener al menos 6 caracteres.';
+    END IF;
+
+    v_email := v_usuario_limpio || '@ynacaja.app';
+
+    -- 1. Crear el puesto
+    INSERT INTO public.puestos (nombre, porcentaje_comision, activo)
+    VALUES (trim(p_nombre_puesto), p_comision, true)
+    RETURNING id INTO v_puesto_id;
+
+    -- 2. Crear o actualizar usuario en auth.users
+    SELECT id INTO v_user_id FROM auth.users WHERE lower(email) = lower(v_email);
+    v_encrypted_pw := extensions.crypt(p_password, extensions.gen_salt('bf'));
+
+    IF v_user_id IS NULL THEN
+        v_user_id := gen_random_uuid();
+        INSERT INTO auth.users (
+            instance_id,
+            id,
+            aud,
+            role,
+            email,
+            encrypted_password,
+            email_confirmed_at,
+            raw_app_meta_data,
+            raw_user_meta_data,
+            created_at,
+            updated_at
+        ) VALUES (
+            '00000000-0000-0000-0000-000000000000',
+            v_user_id,
+            'authenticated',
+            'authenticated',
+            v_email,
+            v_encrypted_pw,
+            now(),
+            '{"provider":"email","providers":["email"]}'::jsonb,
+            jsonb_build_object('nombre', trim(p_nombre_puesto), 'usuario', v_usuario_limpio),
+            now(),
+            now()
+        );
+
+        BEGIN
+            INSERT INTO auth.identities (id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+            VALUES (v_user_id, v_user_id, jsonb_build_object('sub', v_user_id::text, 'email', v_email), 'email', now(), now(), now())
+            ON CONFLICT DO NOTHING;
+        EXCEPTION WHEN OTHERS THEN
+            NULL;
+        END;
+    ELSE
+        UPDATE auth.users
+        SET encrypted_password = v_encrypted_pw,
+            email_confirmed_at = coalesce(email_confirmed_at, now()),
+            updated_at = now()
+        WHERE id = v_user_id;
+    END IF;
+
+    -- 3. Crear o actualizar perfil como vendedor asignado al nuevo puesto
+    INSERT INTO public.perfiles (id, nombre, rol, puesto_id, usuario, email)
+    VALUES (v_user_id, trim(p_nombre_puesto), 'vendedor', v_puesto_id, v_usuario_limpio, v_email)
+    ON CONFLICT (id) DO UPDATE
+    SET nombre = trim(p_nombre_puesto),
+        rol = 'vendedor',
+        puesto_id = v_puesto_id,
+        usuario = v_usuario_limpio,
+        email = v_email;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'puesto_id', v_puesto_id,
+        'user_id', v_user_id,
+        'email', v_email,
+        'usuario', v_usuario_limpio
+    );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.asignar_vendedor_a_puesto(
+    p_puesto_id UUID,
+    p_usuario_corto TEXT,
+    p_password TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, extensions
+AS $$
+DECLARE
+    v_usuario_limpio TEXT;
+    v_email TEXT;
+    v_user_id UUID;
+    v_puesto_nombre TEXT;
+    v_encrypted_pw TEXT;
+BEGIN
+    -- Validar que quien ejecuta sea admin
+    IF public.get_auth_role() != 'admin' THEN
+        RAISE EXCEPTION 'Solo los administradores pueden asignar vendedores.';
+    END IF;
+
+    SELECT nombre INTO v_puesto_nombre FROM public.puestos WHERE id = p_puesto_id;
+    IF v_puesto_nombre IS NULL THEN
+        RAISE EXCEPTION 'El puesto especificado no existe.';
+    END IF;
+
+    -- Limpiar usuario corto
+    v_usuario_limpio := lower(trim(regexp_replace(p_usuario_corto, '[@].*$', '')));
+    v_usuario_limpio := regexp_replace(v_usuario_limpio, '[^a-z0-9._-]', '', 'g');
+
+    IF length(v_usuario_limpio) < 2 THEN
+        RAISE EXCEPTION 'El usuario debe tener al menos 2 caracteres alfanuméricos.';
+    END IF;
+
+    IF length(p_password) < 6 THEN
+        RAISE EXCEPTION 'La contraseña debe tener al menos 6 caracteres.';
+    END IF;
+
+    v_email := v_usuario_limpio || '@ynacaja.app';
+    v_encrypted_pw := extensions.crypt(p_password, extensions.gen_salt('bf'));
+
+    SELECT id INTO v_user_id FROM auth.users WHERE lower(email) = lower(v_email);
+
+    IF v_user_id IS NULL THEN
+        v_user_id := gen_random_uuid();
+        INSERT INTO auth.users (
+            instance_id,
+            id,
+            aud,
+            role,
+            email,
+            encrypted_password,
+            email_confirmed_at,
+            raw_app_meta_data,
+            raw_user_meta_data,
+            created_at,
+            updated_at
+        ) VALUES (
+            '00000000-0000-0000-0000-000000000000',
+            v_user_id,
+            'authenticated',
+            'authenticated',
+            v_email,
+            v_encrypted_pw,
+            now(),
+            '{"provider":"email","providers":["email"]}'::jsonb,
+            jsonb_build_object('nombre', v_puesto_nombre, 'usuario', v_usuario_limpio),
+            now(),
+            now()
+        );
+
+        BEGIN
+            INSERT INTO auth.identities (id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+            VALUES (v_user_id, v_user_id, jsonb_build_object('sub', v_user_id::text, 'email', v_email), 'email', now(), now(), now())
+            ON CONFLICT DO NOTHING;
+        EXCEPTION WHEN OTHERS THEN
+            NULL;
+        END;
+    ELSE
+        UPDATE auth.users
+        SET encrypted_password = v_encrypted_pw,
+            email_confirmed_at = coalesce(email_confirmed_at, now()),
+            updated_at = now()
+        WHERE id = v_user_id;
+    END IF;
+
+    -- Asignar puesto al perfil
+    INSERT INTO public.perfiles (id, nombre, rol, puesto_id, usuario, email)
+    VALUES (v_user_id, v_puesto_nombre, 'vendedor', p_puesto_id, v_usuario_limpio, v_email)
+    ON CONFLICT (id) DO UPDATE
+    SET puesto_id = p_puesto_id,
+        rol = 'vendedor',
+        nombre = v_puesto_nombre,
+        usuario = v_usuario_limpio,
+        email = v_email;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'puesto_id', p_puesto_id,
+        'user_id', v_user_id,
+        'email', v_email,
+        'usuario', v_usuario_limpio
+    );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.crear_puesto_con_vendedor(TEXT, NUMERIC, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.asignar_vendedor_a_puesto(UUID, TEXT, TEXT) TO authenticated;

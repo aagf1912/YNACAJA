@@ -24,6 +24,12 @@ export interface Puesto {
   porcentaje_comision: number;
   activo: boolean;
   created_at?: string;
+  vendedor?: {
+    id: string;
+    nombre?: string;
+    usuario?: string;
+    email?: string;
+  } | null;
 }
 
 export type RolUsuario = 'admin' | 'vendedor';
