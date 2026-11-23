@@ -645,18 +645,29 @@ export async function getVentasHoyPuesto(puestoId: string, fecha: string): Promi
 export async function insertMovimientos(
   movs: Omit<Movimiento, 'id' | 'created_at' | 'puesto'>[]
 ): Promise<Movimiento[]> {
+  // Obtener ID del usuario autenticado si no viene explícito
+  let authUserId: string | null = null;
+  if (supabase) {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.id) authUserId = user.id;
+    } catch {}
+  }
+
   const newItems: Movimiento[] = movs.map((m) => {
     const tasa = Number(m.tasa ?? m.tasa_aplicada ?? 100);
     const montoOrig = Number(m.monto_original) || 0;
     const monto_usd = m.monto_usd ?? (m.moneda_original === 'USD' ? montoOrig : (tasa > 0 ? montoOrig / tasa : 0));
     const monto_bs = m.monto_bs ?? (m.moneda_original === 'USD' ? montoOrig * tasa : montoOrig);
-    const userId = m.user_id || m.creado_por || null;
+    const userId = m.user_id || m.creado_por || authUserId || null;
     // Estándar único: siempre 'venta' para ingresos/ventas y 'gasto' para egresos/gastos
     const tipoNormalizado: TipoMovimiento = (m.tipo === 'ingreso' || m.tipo === 'venta') ? 'venta' : 'gasto';
+    const monedaOriginal = m.moneda_original || (m.metodo_pago === 'divisa' ? 'USD' : 'VES');
 
     return {
       ...m,
       tipo: tipoNormalizado,
+      moneda_original: monedaOriginal,
       id: crypto.randomUUID ? crypto.randomUUID() : `mov_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       created_at: new Date().toISOString(),
       tasa_aplicada: tasa,
@@ -675,8 +686,8 @@ export async function insertMovimientos(
         fecha: item.fecha,
         descripcion: item.descripcion,
         tipo: item.tipo,
-        naturaleza: item.naturaleza,
-        categoria: item.categoria,
+        naturaleza: item.naturaleza || 'Negocio',
+        categoria: item.categoria || 'Ventas',
         metodo_pago: item.metodo_pago,
         moneda_original: item.moneda_original,
         monto_original: item.monto_original,
@@ -689,10 +700,16 @@ export async function insertMovimientos(
         user_id: item.user_id || item.creado_por || null,
       }));
 
-      const { data, error } = await supabase
+      const insertPromise = supabase
         .from('movimientos')
         .insert(dbPayload)
         .select('*, puesto:puestos(*)');
+
+      const timeoutPromise = new Promise<any>((_, reject) =>
+        setTimeout(() => reject(new Error('Tiempo de espera agotado al guardar en Supabase (10s)')), 10000)
+      );
+
+      const { data, error } = await Promise.race([insertPromise, timeoutPromise]);
 
       if (!error && data && data.length > 0) {
         const local = getLocalMovimientos();
@@ -801,11 +818,17 @@ export async function deleteMovimiento(id: string): Promise<boolean> {
 export async function eliminarMovimientosDiaPuesto(puestoId: string, fecha: string): Promise<boolean> {
   if (supabase) {
     try {
-      const { error } = await supabase
+      const deletePromise = supabase
         .from('movimientos')
         .delete()
         .eq('puesto_id', puestoId)
         .eq('fecha', fecha);
+
+      const timeoutPromise = new Promise<any>((_, reject) =>
+        setTimeout(() => reject(new Error('Tiempo de espera agotado al eliminar registros previos en Supabase (8s)')), 8000)
+      );
+
+      const { error } = await Promise.race([deletePromise, timeoutPromise]);
 
       if (error) {
         console.warn('Aviso eliminando movimientos previos del puesto en la fecha:', error.message);
