@@ -1,6 +1,6 @@
 export type TipoMovimiento = 'venta' | 'gasto' | 'ingreso' | 'egreso';
 
-export type NaturalezaMovimiento = 'Negocio' | 'Personal' | 'Gastos' | 'Créditos / Otros';
+export type NaturalezaMovimiento = 'Negocio' | 'Personal' | 'Gastos' | 'Créditos / Otros' | 'Ventas';
 
 export type CategoriaMovimiento =
   | 'Ventas'

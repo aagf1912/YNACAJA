@@ -1,13 +1,36 @@
 import React, { useState } from 'react';
-import { ClipboardPaste, Plus, Pencil, Trash2, CheckCircle2, AlertCircle, Loader2, Store } from 'lucide-react';
-import { Movimiento, Puesto } from '../types';
+import {
+  TrendingDown,
+  TrendingUp,
+  User,
+  Store,
+  Calendar,
+  CreditCard,
+  DollarSign,
+  Banknote,
+  Smartphone,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+  Pencil,
+  Trash2,
+  Tag,
+  Clock,
+} from 'lucide-react';
+import {
+  CategoriaMovimiento,
+  CATEGORIAS_GASTO,
+  MetodoPago,
+  METODOS_PAGO_LABELS,
+  Movimiento,
+  NaturalezaMovimiento,
+  Puesto,
+  TipoMovimiento,
+} from '../types';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
 import { formatMontoMovimiento, formatNumber } from '../utils/format';
-import { METODOS_PAGO_LABELS } from '../types';
+import { getVenezuelaDate } from '../utils/parserLocal';
 import { ModalMovimiento } from '../components/ModalMovimiento';
-import { analizarTextoMovimientos } from '../services/api';
-import { parseTextoLocal, getVenezuelaDate } from '../utils/parserLocal';
-import { Clipboard as CapClipboard } from '@capacitor/clipboard';
 
 interface Props {
   tasaDia: number;
@@ -17,6 +40,8 @@ interface Props {
   onEliminarMovimiento: (id: string) => Promise<void>;
 }
 
+type ModoRegistro = 'gastos' | 'personal' | 'ventas';
+
 export const RegistrarView: React.FC<Props> = ({
   tasaDia,
   puestos = [],
@@ -24,216 +49,484 @@ export const RegistrarView: React.FC<Props> = ({
   onActualizarMovimiento,
   onEliminarMovimiento,
 }) => {
-  const [texto, setTexto] = useState('');
-  const [puestoSeleccionado, setPuestoSeleccionado] = useState<string>('');
-  const [procesando, setProcesando] = useState(false);
-  const [mensajeError, setMensajeError] = useState<string | null>(null);
-  const [ultimoLote, setUltimoLote] = useState<Movimiento[]>([]);
-  const [modalManualAbierto, setModalManualAbierto] = useState(false);
+  // Estado del formulario
+  const [modo, setModo] = useState<ModoRegistro>('gastos');
+  const [puestoId, setPuestoId] = useState<string>('');
+  const [fecha, setFecha] = useState<string>(getVenezuelaDate());
+  const [metodoPago, setMetodoPago] = useState<MetodoPago>('pago_movil');
+  const [monto, setMonto] = useState<string>('');
+  const [descripcion, setDescripcion] = useState<string>('');
+  const [categoriaGasto, setCategoriaGasto] = useState<CategoriaMovimiento>('Materia Prima');
+
+  // Estado de feedback y guardado
+  const [guardando, setGuardando] = useState(false);
+  const [errorMensaje, setErrorMensaje] = useState<string | null>(null);
+  const [exitoMensaje, setExitoMensaje] = useState<string | null>(null);
+
+  // Historial de la sesión actual
+  const [movimientosSesion, setMovimientosSesion] = useState<Movimiento[]>([]);
+
+  // Modal para editar algún movimiento del historial de la sesión
   const [movimientoParaEditar, setMovimientoParaEditar] = useState<Movimiento | null>(null);
+  const [modalEditarAbierto, setModalEditarAbierto] = useState(false);
 
-  const handlePegar = async () => {
-    try {
-      const result = await CapClipboard.read();
-      if (result && result.value) {
-        setTexto((prev) => (prev ? `${prev}\n${result.value}` : result.value));
-        return;
-      }
-    } catch {
-      // Fallback a API nativa del navegador
-    }
-
-    try {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        const text = await navigator.clipboard.readText();
-        if (text) {
-          setTexto((prev) => (prev ? `${prev}\n${text}` : text));
-        }
-      }
-    } catch (e) {
-      console.warn('Error accediendo al portapapeles:', e);
-    }
+  // Sugerencias rápidas de descripción según el tipo seleccionado
+  const sugerencias = {
+    gastos: ['Hielo y vasos', 'Materia prima', 'Leche condensada', 'Canela / Insumos', 'Flete / Transporte', 'Bolsas y empaques'],
+    personal: ['Retiro personal Ynaides', 'Almuerzo / Comida', 'Gasto personal', 'Ocio / Varios'],
+    ventas: ['Venta del día', 'Venta especial evento', 'Venta mayor'],
   };
 
-  const handleProcesar = async () => {
-    if (!texto.trim()) {
-      setMensajeError('Por favor escribe o pega el texto con los movimientos diarios.');
+  // Cálculo en vivo de conversión
+  const montoNumerico = parseFloat(monto.replace(',', '.')) || 0;
+  const esDolar = metodoPago === 'divisa';
+  const tasaSegura = tasaDia > 0 ? tasaDia : 100;
+  const montoEquivalente = esDolar
+    ? montoNumerico * tasaSegura
+    : (tasaSegura > 0 ? montoNumerico / tasaSegura : 0);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMensaje(null);
+    setExitoMensaje(null);
+
+    const mNum = parseFloat(monto.replace(',', '.'));
+    if (isNaN(mNum) || mNum <= 0) {
+      setErrorMensaje('Por favor ingresa un monto válido mayor a 0.');
       return;
     }
 
-    setProcesando(true);
-    setMensajeError(null);
+    if (!descripcion.trim()) {
+      setErrorMensaje('Por favor escribe el concepto o descripción del movimiento.');
+      return;
+    }
+
+    setGuardando(true);
 
     try {
-      const fechaActual = getVenezuelaDate();
+      let tipoMov: TipoMovimiento = 'gasto';
+      let natMov: NaturalezaMovimiento = 'Negocio';
+      let catMov: CategoriaMovimiento = categoriaGasto;
 
-      // 1. Intentar primero con el parser local ultrarrápido
-      let movimientosExtraidos = parseTextoLocal(texto, fechaActual, 'admin');
-
-      // 2. Si no encuentra nada, consultar el backend API (respaldo Gemini)
-      if (movimientosExtraidos.length === 0) {
-        movimientosExtraidos = await analizarTextoMovimientos(texto, fechaActual, 'admin');
+      if (modo === 'ventas') {
+        tipoMov = 'venta';
+        natMov = 'Ventas';
+        catMov = 'Ventas';
+      } else if (modo === 'personal') {
+        tipoMov = 'gasto';
+        natMov = 'Personal';
+        catMov = 'Personal / Ocio / Regalos';
+      } else {
+        tipoMov = 'gasto';
+        natMov = 'Negocio';
+        catMov = categoriaGasto || 'Materia Prima';
       }
 
-      if (movimientosExtraidos.length === 0) {
-        setMensajeError('No se identificaron movimientos válidos en el texto ingresado.');
-        setProcesando(false);
-        return;
+      const montoBs = esDolar ? Math.round(mNum * tasaSegura * 100) / 100 : mNum;
+      const montoUSD = esDolar ? mNum : Math.round((mNum / tasaSegura) * 100) / 100;
+
+      const nuevoMov: Omit<Movimiento, 'id' | 'created_at'> = {
+        fecha,
+        descripcion: descripcion.trim(),
+        tipo: tipoMov,
+        naturaleza: natMov,
+        categoria: catMov,
+        metodo_pago: metodoPago,
+        moneda_original: esDolar ? 'USD' : 'VES',
+        moneda: esDolar ? 'USD' : 'VES',
+        monto_original: mNum,
+        monto_bs: montoBs,
+        monto_usd: montoUSD,
+        tasa_aplicada: tasaSegura,
+        tasa: tasaSegura,
+        puesto_id: puestoId || null,
+      };
+
+      const guardados = await onGuardarMovimientos([nuevoMov]);
+
+      if (guardados && guardados.length > 0) {
+        setMovimientosSesion((prev) => [guardados[0], ...prev]);
+        setExitoMensaje(`✓ Guardado con éxito: "${nuevoMov.descripcion}" (${formatMontoMovimiento(guardados[0])})`);
+      } else {
+        setExitoMensaje(`✓ Guardado con éxito: "${nuevoMov.descripcion}"`);
       }
 
-      // Preparar para guardar, asignando la tasa_dia actual y el puesto seleccionado si aplica
-      const aGuardar = movimientosExtraidos.map((m) => ({
-        fecha: m.fecha || fechaActual,
-        descripcion: m.descripcion,
-        tipo: (m.tipo === 'ingreso' || m.tipo === 'venta') ? ('venta' as const) : ('gasto' as const),
-        naturaleza: m.naturaleza,
-        categoria: m.categoria,
-        metodo_pago: m.metodo_pago,
-        moneda_original: m.moneda_original,
-        moneda: m.moneda_original,
-        monto_original: m.monto_original,
-        tasa_aplicada: tasaDia,
-        tasa: tasaDia,
-        puesto_id: puestoSeleccionado || null,
-      }));
-
-      const guardados = await onGuardarMovimientos(aGuardar);
-      setUltimoLote(guardados);
-      setTexto('');
+      // Limpiar únicamente monto y descripción para seguir registrando ágilmente
+      setMonto('');
+      setDescripcion('');
     } catch (err: any) {
-      setMensajeError(err?.message || 'Error al procesar y guardar la nota.');
+      setErrorMensaje(err?.message || 'Error al guardar el movimiento. Inténtalo nuevamente.');
     } finally {
-      setProcesando(false);
+      setGuardando(false);
     }
   };
 
-  const handleGuardarManual = async (mov: Omit<Movimiento, 'id' | 'created_at'> & { id?: string }) => {
+  const handleEliminarItem = async (id: string) => {
+    if (window.confirm('¿Deseas eliminar este registro?')) {
+      try {
+        await onEliminarMovimiento(id);
+        setMovimientosSesion((prev) => prev.filter((m) => m.id !== id));
+      } catch (err: any) {
+        alert(err?.message || 'Error al eliminar');
+      }
+    }
+  };
+
+  const handleActualizarItem = async (mov: Omit<Movimiento, 'id' | 'created_at'> & { id?: string }) => {
     if (mov.id) {
       await onActualizarMovimiento(mov as Movimiento);
-      setUltimoLote((prev) => prev.map((item) => (item.id === mov.id ? (mov as Movimiento) : item)));
-    } else {
-      const guardados = await onGuardarMovimientos([mov]);
-      setUltimoLote(guardados);
-    }
-  };
-
-  const handleEliminarItemLote = async (id: string) => {
-    if (window.confirm('¿Deseas eliminar este registro?')) {
-      await onEliminarMovimiento(id);
-      setUltimoLote((prev) => prev.filter((item) => item.id !== id));
+      setMovimientosSesion((prev) =>
+        prev.map((item) => (item.id === mov.id ? (mov as Movimiento) : item))
+      );
     }
   };
 
   return (
-    <div className="space-y-4 pb-20 pt-2 px-3 sm:px-4 max-w-4xl mx-auto">
-      {/* Barra superior de acción rápida */}
+    <div className="space-y-4 pb-20 pt-2 px-3 sm:px-4 max-w-2xl mx-auto">
+      {/* Encabezado */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-base font-bold text-[#18181B] tracking-tight">
-            Registro Diario Rápido
+            Registrar Movimiento
           </h1>
           <p className="text-xs text-[#52525B]">
-            Pega el reporte de ventas y gastos de WhatsApp
+            Carga rápida de ventas, gastos del negocio y retiros personales
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setMovimientoParaEditar(null);
-            setModalManualAbierto(true);
-          }}
-          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-[#2C474E] bg-white border border-[#E4E4E7] rounded hover:bg-zinc-50 active:bg-zinc-100 min-h-[36px]"
-        >
-          <Plus size={14} />
-          <span>+ Carga manual rápida</span>
-        </button>
+        <div className="flex items-center gap-1.5 px-2.5 py-1 bg-white border border-[#E4E4E7] rounded text-xs text-[#2C474E] font-medium shadow-xs">
+          <Clock size={13} className="text-[#52525B]" />
+          <span>Tasa BCV:</span>
+          <span className="font-bold tabular-nums">{formatNumber(tasaDia)} Bs/$</span>
+        </div>
       </div>
 
-      {/* Tarjeta de Entrada de Texto */}
-      <div className="bg-white border border-[#E4E4E7] rounded-lg p-3 sm:p-4 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-          <label htmlFor="input-nota" className="block text-xs font-semibold text-[#52525B]">
-            Pegar texto de ventas y gastos (uno o varios días)
-          </label>
+      {/* Tarjeta Principal del Formulario */}
+      <div className="bg-white border border-[#E4E4E7] rounded-xl p-4 sm:p-5 shadow-xs">
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* 1. Selector de Naturaleza / Tipo (Gastos, Personal, Ventas) */}
+          <div>
+            <label className="block text-xs font-semibold text-[#52525B] mb-1.5">
+              Tipo de Movimiento
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {/* Opción GASTOS */}
+              <button
+                type="button"
+                onClick={() => {
+                  setModo('gastos');
+                  setErrorMensaje(null);
+                }}
+                className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg border text-center transition-all ${
+                  modo === 'gastos'
+                    ? 'border-[#EF4444] bg-[#FEF2F2] text-[#991B1B] font-bold shadow-xs ring-1 ring-[#EF4444]'
+                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <TrendingDown size={16} className={modo === 'gastos' ? 'text-[#DC2626]' : 'text-zinc-400'} />
+                  <span className="text-xs sm:text-sm">Gastos</span>
+                </div>
+                <span className="text-[10px] text-zinc-500 mt-0.5">Negocio</span>
+              </button>
 
-          {/* Selector opcional de Puesto */}
-          {puestos.length > 0 && (
-            <div className="flex items-center gap-1.5">
-              <Store size={13} className="text-[#52525B]" />
+              {/* Opción PERSONAL */}
+              <button
+                type="button"
+                onClick={() => {
+                  setModo('personal');
+                  setErrorMensaje(null);
+                }}
+                className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg border text-center transition-all ${
+                  modo === 'personal'
+                    ? 'border-[#F59E0B] bg-[#FFFBEB] text-[#92400E] font-bold shadow-xs ring-1 ring-[#F59E0B]'
+                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <User size={16} className={modo === 'personal' ? 'text-[#D97706]' : 'text-zinc-400'} />
+                  <span className="text-xs sm:text-sm">Personal</span>
+                </div>
+                <span className="text-[10px] text-zinc-500 mt-0.5">Retiros / Ocio</span>
+              </button>
+
+              {/* Opción VENTAS */}
+              <button
+                type="button"
+                onClick={() => {
+                  setModo('ventas');
+                  setErrorMensaje(null);
+                }}
+                className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg border text-center transition-all ${
+                  modo === 'ventas'
+                    ? 'border-[#10B981] bg-[#ECFDF5] text-[#065F46] font-bold shadow-xs ring-1 ring-[#10B981]'
+                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <TrendingUp size={16} className={modo === 'ventas' ? 'text-[#059669]' : 'text-zinc-400'} />
+                  <span className="text-xs sm:text-sm">Ventas</span>
+                </div>
+                <span className="text-[10px] text-zinc-500 mt-0.5">Ingresos</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 2. Fila: Puesto y Fecha */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Selector de Puesto */}
+            <div>
+              <label className="block text-xs font-semibold text-[#52525B] mb-1">
+                <span className="flex items-center gap-1">
+                  <Store size={13} />
+                  Puesto de Venta
+                </span>
+              </label>
               <select
-                value={puestoSeleccionado}
-                onChange={(e) => setPuestoSeleccionado(e.target.value)}
-                className="text-xs px-2 py-1 border border-[#E4E4E7] rounded bg-[#FAFAFA] text-[#18181B] focus:outline-none focus:ring-1 focus:ring-[#2C474E]"
+                value={puestoId}
+                onChange={(e) => setPuestoId(e.target.value)}
+                className="w-full px-3 py-2 text-xs sm:text-sm border border-[#E4E4E7] rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E]"
               >
                 <option value="">Sin puesto específico (General)</option>
-                {puestos.filter((p) => p.activo).map((p) => (
+                {puestos.map((p) => (
                   <option key={p.id} value={p.id}>
-                    Asignar a: {p.nombre}
+                    {p.nombre} {p.activo === false ? '(Inactivo)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Selector de Fecha */}
+            <div>
+              <label className="block text-xs font-semibold text-[#52525B] mb-1">
+                <span className="flex items-center gap-1">
+                  <Calendar size={13} />
+                  Fecha
+                </span>
+              </label>
+              <input
+                type="date"
+                value={fecha}
+                onChange={(e) => setFecha(e.target.value)}
+                required
+                className="w-full px-3 py-2 text-xs sm:text-sm border border-[#E4E4E7] rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E]"
+              />
+            </div>
+          </div>
+
+          {/* 3. Selector de Método de Pago */}
+          <div>
+            <label className="block text-xs font-semibold text-[#52525B] mb-1.5">
+              Método de Pago
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {/* Pago Móvil */}
+              <button
+                type="button"
+                onClick={() => setMetodoPago('pago_movil')}
+                className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg border text-xs transition-all ${
+                  metodoPago === 'pago_movil'
+                    ? 'border-[#2C474E] bg-[#2C474E] text-white font-bold shadow-xs'
+                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                }`}
+              >
+                <Smartphone size={14} />
+                <span>Pago Móvil</span>
+              </button>
+
+              {/* Efectivo Bs */}
+              <button
+                type="button"
+                onClick={() => setMetodoPago('efectivo_bs')}
+                className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg border text-xs transition-all ${
+                  metodoPago === 'efectivo_bs'
+                    ? 'border-[#2C474E] bg-[#2C474E] text-white font-bold shadow-xs'
+                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                }`}
+              >
+                <Banknote size={14} />
+                <span>Efectivo (Bs)</span>
+              </button>
+
+              {/* Punto de Venta */}
+              <button
+                type="button"
+                onClick={() => setMetodoPago('punto_venta')}
+                className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg border text-xs transition-all ${
+                  metodoPago === 'punto_venta'
+                    ? 'border-[#2C474E] bg-[#2C474E] text-white font-bold shadow-xs'
+                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                }`}
+              >
+                <CreditCard size={14} />
+                <span>Punto de Venta</span>
+              </button>
+
+              {/* Divisas ($) */}
+              <button
+                type="button"
+                onClick={() => setMetodoPago('divisa')}
+                className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg border text-xs transition-all ${
+                  metodoPago === 'divisa'
+                    ? 'border-[#15803D] bg-[#15803D] text-white font-bold shadow-xs'
+                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                }`}
+              >
+                <DollarSign size={14} />
+                <span>Divisas ($)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 4. Categoría opcional para Gastos */}
+          {modo === 'gastos' && (
+            <div>
+              <label className="block text-xs font-semibold text-[#52525B] mb-1">
+                <span className="flex items-center gap-1">
+                  <Tag size={13} />
+                  Categoría del Gasto
+                </span>
+              </label>
+              <select
+                value={categoriaGasto}
+                onChange={(e) => setCategoriaGasto(e.target.value as CategoriaMovimiento)}
+                className="w-full px-3 py-2 text-xs sm:text-sm border border-[#E4E4E7] rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E]"
+              >
+                {CATEGORIAS_GASTO.filter((c) => c.naturaleza === 'Negocio').map((c) => (
+                  <option key={c.nombre} value={c.nombre}>
+                    {c.nombre}
                   </option>
                 ))}
               </select>
             </div>
           )}
-        </div>
 
-        <textarea
-          id="input-nota"
-          rows={6}
-          value={texto}
-          onChange={(e) => setTexto(e.target.value)}
-          disabled={procesando}
-          placeholder={`Ejemplo:\nMartes 18: 45000 pago movil, 12000 punto, 15$ divisa. 8000 de hielo, 15000 leche, 12000 cashea y 6500 una hamburguesa para mi`}
-          className="w-full p-3 text-xs sm:text-sm border border-[#E4E4E7] rounded bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E] placeholder:text-zinc-400 font-mono resize-y"
-        />
+          {/* 5. Input de Monto con Conversión en Vivo */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-semibold text-[#18181B]">
+                {esDolar ? 'Monto en Divisas ($ USD)' : 'Monto en Bolívares (Bs)'}
+              </label>
+              {montoNumerico > 0 && (
+                <span className="text-[11px] font-semibold text-[#2C474E] tabular-nums bg-zinc-100 px-2 py-0.5 rounded">
+                  {esDolar
+                    ? `≈ Bs. ${formatNumber(montoEquivalente)}`
+                    : `≈ $ ${formatNumber(montoEquivalente)}`}
+                </span>
+              )}
+            </div>
 
-        {/* Fila de Acciones debajo del Textarea */}
-        <div className="mt-3 flex items-center justify-between gap-2">
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-zinc-400">
+                {esDolar ? '$' : 'Bs.'}
+              </span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={monto}
+                onChange={(e) => setMonto(e.target.value)}
+                placeholder="0.00"
+                required
+                className="w-full pl-10 pr-3 py-2.5 text-base sm:text-lg font-bold border border-[#E4E4E7] rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E] tabular-nums"
+              />
+            </div>
+            <p className="text-[11px] text-zinc-500 mt-1">
+              {esDolar
+                ? `Conversión oficial: $1.00 = ${formatNumber(tasaSegura)} Bs`
+                : `Conversión oficial: ${formatNumber(tasaSegura)} Bs = $1.00`}
+            </p>
+          </div>
+
+          {/* 6. Input de Descripción / Concepto */}
+          <div>
+            <label className="block text-xs font-semibold text-[#18181B] mb-1">
+              Descripción / Concepto
+            </label>
+            <input
+              type="text"
+              value={descripcion}
+              onChange={(e) => setDescripcion(e.target.value)}
+              placeholder={
+                modo === 'gastos'
+                  ? 'Ej: Hielo y vasos, compra de leche condensada...'
+                  : modo === 'personal'
+                  ? 'Ej: Retiro personal Ynaides, almuerzo...'
+                  : 'Ej: Venta del día, venta evento...'
+              }
+              required
+              className="w-full px-3 py-2.5 text-xs sm:text-sm border border-[#E4E4E7] rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E]"
+            />
+
+            {/* Chips de sugerencias rápidas */}
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {sugerencias[modo].map((sug) => (
+                <button
+                  key={sug}
+                  type="button"
+                  onClick={() => setDescripcion(sug)}
+                  className="px-2 py-1 text-[11px] bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-md transition-colors"
+                >
+                  + {sug}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Mensajes de Alerta / Éxito */}
+          {errorMensaje && (
+            <div className="p-3 bg-[#FEF2F2] border border-[#FECACA] rounded-lg text-xs text-[#991B1B] flex items-start gap-2">
+              <AlertCircle size={16} className="shrink-0 mt-0.5" />
+              <span>{errorMensaje}</span>
+            </div>
+          )}
+
+          {exitoMensaje && (
+            <div className="p-3 bg-[#ECFDF5] border border-[#BBF7D0] rounded-lg text-xs text-[#166534] flex items-start gap-2 animate-fadeIn">
+              <CheckCircle2 size={16} className="shrink-0 mt-0.5 text-[#166534]" />
+              <span className="font-semibold">{exitoMensaje}</span>
+            </div>
+          )}
+
+          {/* 7. Botón Principal "Guardar Movimiento" */}
           <button
-            type="button"
-            onClick={handlePegar}
-            disabled={procesando}
-            className="min-h-[44px] px-4 py-2 text-xs font-semibold border border-[#E4E4E7] bg-white text-[#18181B] rounded hover:bg-zinc-50 active:bg-zinc-100 flex items-center justify-center gap-1.5 transition-colors"
+            type="submit"
+            disabled={guardando}
+            className={`w-full min-h-[46px] px-4 py-2.5 text-xs sm:text-sm font-bold text-white rounded-lg flex items-center justify-center gap-2 transition-all shadow-xs ${
+              modo === 'ventas'
+                ? 'bg-[#15803D] hover:bg-[#166534] active:bg-[#14532D]'
+                : modo === 'personal'
+                ? 'bg-[#D97706] hover:bg-[#B45309] active:bg-[#92400E]'
+                : 'bg-[#2C474E] hover:bg-[#23393e] active:bg-[#1a2b2f]'
+            } disabled:opacity-60`}
           >
-            <ClipboardPaste size={16} className="text-[#52525B]" />
-            Pegar
-          </button>
-
-          <button
-            type="button"
-            onClick={handleProcesar}
-            disabled={procesando}
-            className="flex-1 min-h-[44px] px-4 py-2 text-xs sm:text-sm font-semibold bg-[#2C474E] text-white rounded hover:bg-[#23393e] active:bg-[#1a2b2f] flex items-center justify-center gap-2 transition-colors disabled:opacity-70"
-          >
-            {procesando ? (
+            {guardando ? (
               <>
                 <Loader2 size={16} className="animate-spin text-white" />
-                <span>Procesando nota...</span>
+                <span>Guardando movimiento...</span>
               </>
             ) : (
               <>
-                <CheckCircle2 size={16} className="text-[#86EFAC]" />
-                <span>Procesar y Guardar</span>
+                <CheckCircle2 size={16} />
+                <span>
+                  {modo === 'ventas'
+                    ? 'Guardar Venta'
+                    : modo === 'personal'
+                    ? 'Guardar Retiro Personal'
+                    : 'Guardar Movimiento'}
+                </span>
               </>
             )}
           </button>
-        </div>
-
-        {mensajeError && (
-          <div className="mt-3 p-2.5 bg-[#FEF2F2] border border-[#FECACA] rounded text-xs text-[#991B1B] flex items-start gap-2">
-            <AlertCircle size={16} className="shrink-0 mt-0.5" />
-            <span>{mensajeError}</span>
-          </div>
-        )}
+        </form>
       </div>
 
-      {/* Tarjeta Último Registro Guardado */}
-      {ultimoLote.length > 0 && (
-        <div className="bg-white border border-[#E4E4E7] rounded-lg overflow-hidden shadow-xs">
+      {/* 8. Historial de la Sesión Actual */}
+      {movimientosSesion.length > 0 && (
+        <div className="bg-white border border-[#E4E4E7] rounded-xl overflow-hidden shadow-xs">
           <div className="bg-[#2C474E] px-3.5 py-2.5 flex items-center justify-between text-white">
             <div className="flex items-center gap-2">
               <CheckCircle2 size={16} className="text-[#86EFAC]" />
               <span className="text-xs font-bold uppercase tracking-wider">
-                Último registro guardado ({ultimoLote.length} {ultimoLote.length === 1 ? 'movimiento' : 'movimientos'})
+                Registrados en esta sesión ({movimientosSesion.length})
               </span>
             </div>
             <span className="text-[11px] text-[#86EFAC] font-semibold tabular-nums">
@@ -241,11 +534,11 @@ export const RegistrarView: React.FC<Props> = ({
             </span>
           </div>
 
-          <div className="divide-y divide-[#E4E4E7]">
-            {ultimoLote.map((item) => (
+          <div className="divide-y divide-[#E4E4E7] max-h-80 overflow-y-auto">
+            {movimientosSesion.map((item) => (
               <div
                 key={item.id}
-                className="p-3 flex items-center justify-between gap-2 hover:bg-zinc-50"
+                className="p-3 flex items-center justify-between gap-2 hover:bg-zinc-50 transition-colors"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap mb-1">
@@ -285,7 +578,7 @@ export const RegistrarView: React.FC<Props> = ({
                       type="button"
                       onClick={() => {
                         setMovimientoParaEditar(item);
-                        setModalManualAbierto(true);
+                        setModalEditarAbierto(true);
                       }}
                       className="p-1.5 text-[#52525B] hover:text-[#2C474E] hover:bg-zinc-100 rounded"
                       title="Editar movimiento"
@@ -294,7 +587,7 @@ export const RegistrarView: React.FC<Props> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleEliminarItemLote(item.id)}
+                      onClick={() => handleEliminarItem(item.id)}
                       className="p-1.5 text-[#52525B] hover:text-[#991B1B] hover:bg-red-50 rounded"
                       title="Eliminar movimiento"
                     >
@@ -308,19 +601,21 @@ export const RegistrarView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Modal para carga manual rápida o edición */}
-      <ModalMovimiento
-        isOpen={modalManualAbierto}
-        movimientoAEditar={movimientoParaEditar}
-        tasaActual={tasaDia}
-        puestos={puestos}
-        puestoIdPorDefecto={puestoSeleccionado || null}
-        onClose={() => {
-          setModalManualAbierto(false);
-          setMovimientoParaEditar(null);
-        }}
-        onGuardar={handleGuardarManual}
-      />
+      {/* Modal para editar algún movimiento registrado en la sesión */}
+      {modalEditarAbierto && movimientoParaEditar && (
+        <ModalMovimiento
+          isOpen={modalEditarAbierto}
+          movimientoAEditar={movimientoParaEditar}
+          tasaActual={tasaDia}
+          puestos={puestos}
+          puestoIdPorDefecto={puestoId || null}
+          onClose={() => {
+            setModalEditarAbierto(false);
+            setMovimientoParaEditar(null);
+          }}
+          onGuardar={handleActualizarItem}
+        />
+      )}
     </div>
   );
 };

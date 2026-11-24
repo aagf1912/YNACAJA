@@ -1,5 +1,5 @@
 import React from 'react';
-import { ClipboardPaste, List, BarChart3 } from 'lucide-react';
+import { PlusCircle, List, BarChart3 } from 'lucide-react';
 
 export type TabKey = 'registrar' | 'movimientos' | 'balance';
 
@@ -13,7 +13,7 @@ export const Navigation: React.FC<Props> = ({ activeTab, onSelectTab }) => {
     {
       key: 'registrar' as TabKey,
       label: 'Registrar',
-      icon: ClipboardPaste,
+      icon: PlusCircle,
     },
     {
       key: 'movimientos' as TabKey,

@@ -19,6 +19,14 @@ export const BadgeNaturaleza: React.FC<Props> = ({ naturaleza, tipo, className =
   }
 
   switch (naturaleza) {
+    case 'Ventas':
+      return (
+        <span
+          className={`inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded border bg-[#ECFDF5] border-[#A7F3D0] text-[#166534] ${className}`}
+        >
+          Venta
+        </span>
+      );
     case 'Gastos':
     case 'Negocio':
       return (
