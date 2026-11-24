@@ -1,10 +1,21 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Pencil, Trash2, Calendar, Plus, Store } from 'lucide-react';
+import {
+  Search,
+  Pencil,
+  Trash2,
+  Calendar,
+  Plus,
+  Store,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { Movimiento, Puesto, TipoMovimiento } from '../types';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
-import { calcularMontos, formatMontoMovimiento, formatUSD } from '../utils/format';
+import { calcularMontos, formatMontoMovimiento, formatUSD, formatVES, formatNumber } from '../utils/format';
 import { METODOS_PAGO_LABELS } from '../types';
 import { ModalMovimiento } from '../components/ModalMovimiento';
+import { ModalCierrePuesto } from '../components/ModalCierrePuesto';
+import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
 
 interface Props {
   movimientos: Movimiento[];
@@ -16,6 +27,24 @@ interface Props {
 }
 
 type FiltroTipo = 'todos' | 'ventas' | 'gastos' | 'personal';
+
+interface GrupoCierreRender {
+  tipo: 'cierre';
+  key: string; // `${fecha}_${puesto_id}`
+  fecha: string;
+  puestoId: string;
+  puestoNombre: string;
+  items: Movimiento[];
+  totalUSD: number;
+  totalBs: number;
+}
+
+interface ItemIndividualRender {
+  tipo: 'individual';
+  movimiento: Movimiento;
+}
+
+type ElementoRender = GrupoCierreRender | ItemIndividualRender;
 
 export const MovimientosView: React.FC<Props> = ({
   movimientos,
@@ -30,6 +59,18 @@ export const MovimientosView: React.FC<Props> = ({
   const [busqueda, setBusqueda] = useState('');
   const [movimientoParaEditar, setMovimientoParaEditar] = useState<Movimiento | null>(null);
   const [modalAbierto, setModalAbierto] = useState(false);
+
+  // Estados para Modal de Cierre de Puesto (Administrador)
+  const [modalCierreAbierto, setModalCierreAbierto] = useState<boolean>(false);
+  const [cierreParaEditar, setCierreParaEditar] = useState<{ puestoId: string; fecha: string } | null>(null);
+  const [cierresExpandidos, setCierresExpandidos] = useState<Record<string, boolean>>({});
+
+  const toggleCierre = (cierreKey: string) => {
+    setCierresExpandidos((prev) => ({
+      ...prev,
+      [cierreKey]: !prev[cierreKey],
+    }));
+  };
 
   // Mapa rápido de ID de puesto a Nombre
   const mapaPuestos = useMemo(() => {
@@ -50,8 +91,14 @@ export const MovimientosView: React.FC<Props> = ({
 
       // Filtro tipo / naturaleza
       if (filtro === 'ventas' && m.tipo !== 'venta' && m.tipo !== 'ingreso') return false;
-      if (filtro === 'gastos' && ((m.tipo !== 'gasto' && m.tipo !== 'egreso') || (m.naturaleza !== 'Gastos' && m.naturaleza !== 'Negocio' && m.naturaleza !== 'Créditos / Otros'))) return false;
-      if (filtro === 'personal' && ((m.tipo !== 'gasto' && m.tipo !== 'egreso') || m.naturaleza !== 'Personal')) return false;
+      if (
+        filtro === 'gastos' &&
+        ((m.tipo !== 'gasto' && m.tipo !== 'egreso') ||
+          (m.naturaleza !== 'Gastos' && m.naturaleza !== 'Negocio' && m.naturaleza !== 'Créditos / Otros'))
+      )
+        return false;
+      if (filtro === 'personal' && ((m.tipo !== 'gasto' && m.tipo !== 'egreso') || m.naturaleza !== 'Personal'))
+        return false;
 
       // Búsqueda por texto
       if (busqueda.trim()) {
@@ -67,7 +114,7 @@ export const MovimientosView: React.FC<Props> = ({
     });
   }, [movimientos, filtro, filtroPuesto, busqueda, mapaPuestos]);
 
-  // Agrupamiento cronológico por fecha (descendente)
+  // Agrupamiento cronológico por fecha (descendente) y agrupación de cierres diarios por puesto
   const gruposPorFecha = useMemo(() => {
     const grupos: Record<string, Movimiento[]> = {};
     for (const m of movimientosFiltrados) {
@@ -93,18 +140,93 @@ export const MovimientosView: React.FC<Props> = ({
         }
       }
 
+      // Agrupar cierres diarios de puestos en una sola tarjeta unificada
+      const mapaCierres: Record<string, GrupoCierreRender> = {};
+      const ordenCierres: string[] = [];
+      const individuales: Movimiento[] = [];
+
+      for (const m of items) {
+        const esCierre = m.tipo === 'venta' && Boolean(m.puesto_id) && (m.descripcion || '').startsWith('Cierre ');
+        if (esCierre && m.puesto_id) {
+          const pId = m.puesto_id;
+          if (!mapaCierres[pId]) {
+            ordenCierres.push(pId);
+            const nombrePuesto = m.puesto?.nombre || mapaPuestos[pId] || 'Puesto';
+            mapaCierres[pId] = {
+              tipo: 'cierre',
+              key: `${fecha}_${pId}`,
+              fecha,
+              puestoId: pId,
+              puestoNombre: nombrePuesto,
+              items: [],
+              totalUSD: 0,
+              totalBs: 0,
+            };
+          }
+          const { monto_usd, monto_bs } = calcularMontos(m);
+          mapaCierres[pId].items.push(m);
+          mapaCierres[pId].totalUSD += monto_usd;
+          mapaCierres[pId].totalBs += monto_bs;
+        } else {
+          individuales.push(m);
+        }
+      }
+
+      const elementos: ElementoRender[] = [];
+      for (const pId of ordenCierres) {
+        elementos.push(mapaCierres[pId]);
+      }
+      for (const ind of individuales) {
+        elementos.push({ tipo: 'individual', movimiento: ind });
+      }
+
       return {
         fecha,
         items,
+        elementos,
         totalIngresosUSD,
         totalGastosUSD,
       };
     });
-  }, [movimientosFiltrados]);
+  }, [movimientosFiltrados, mapaPuestos]);
 
   const handleEliminar = async (id: string) => {
     if (window.confirm('¿Deseas eliminar definitivamente este movimiento?')) {
       await onEliminarMovimiento(id);
+    }
+  };
+
+  const handleEliminarCierre = async (cierre: GrupoCierreRender) => {
+    const confirmacion = window.confirm(
+      `¿Estás seguro de que deseas eliminar el Cierre Diario de ${cierre.puestoNombre} del día ${cierre.fecha}? Se eliminarán los ${cierre.items.length} registros de este cierre.`
+    );
+    if (!confirmacion) return;
+
+    try {
+      const token = getAccessTokenFromStorage() || supabaseAnonKey;
+      const url = `${supabaseUrl}/rest/v1/movimientos?puesto_id=eq.${cierre.puestoId}&fecha=eq.${cierre.fecha}&tipo=eq.venta&descripcion=ilike.Cierre%25`;
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!res.ok) {
+        let errMsg = 'Error al eliminar el cierre';
+        try {
+          const errData = await res.json();
+          errMsg = errData?.message || errData?.error_description || errMsg;
+        } catch {
+          const text = await res.text();
+          if (text) errMsg = text;
+        }
+        throw new Error(errMsg);
+      }
+    } catch (err: any) {
+      console.error('Error al eliminar cierre:', err);
+      alert(err?.message || 'Error al eliminar el cierre.');
     }
   };
 
@@ -121,7 +243,7 @@ export const MovimientosView: React.FC<Props> = ({
   return (
     <div className="space-y-4 pb-20 pt-2 px-3 sm:px-4 max-w-4xl mx-auto">
       {/* Encabezado */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
           <h1 className="text-base font-bold text-[#18181B] tracking-tight">
             Movimientos Contables
@@ -130,17 +252,33 @@ export const MovimientosView: React.FC<Props> = ({
             Historial ordenado cronológicamente ({movimientosFiltrados.length} registros)
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setMovimientoParaEditar(null);
-            setModalAbierto(true);
-          }}
-          className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-[#2C474E] text-white rounded hover:bg-[#23393e] active:bg-[#1a2b2f] transition-colors"
-        >
-          <Plus size={14} />
-          <span>+ Nuevo</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {/* BOTÓN + CIERRE DE PUESTO (ADMINISTRADOR) */}
+          <button
+            type="button"
+            onClick={() => {
+              setCierreParaEditar(null);
+              setModalCierreAbierto(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-[#166534] hover:bg-[#14532d] active:bg-[#0f3d21] text-white rounded transition-colors shadow-xs cursor-pointer"
+          >
+            <Store size={14} />
+            <span>+ Cierre de Puesto</span>
+          </button>
+
+          {/* BOTÓN + NUEVO MOVIMIENTO GENERAL */}
+          <button
+            type="button"
+            onClick={() => {
+              setMovimientoParaEditar(null);
+              setModalAbierto(true);
+            }}
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-[#2C474E] text-white rounded hover:bg-[#23393e] active:bg-[#1a2b2f] transition-colors cursor-pointer"
+          >
+            <Plus size={14} />
+            <span>+ Nuevo</span>
+          </button>
+        </div>
       </div>
 
       {/* SELECTOR DE FILTRO POR PUESTO DE VENTA */}
@@ -153,7 +291,7 @@ export const MovimientosView: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => setFiltroPuesto('todos')}
-            className={`px-2.5 py-1 text-xs rounded-full font-semibold transition-colors shrink-0 ${
+            className={`px-2.5 py-1 text-xs rounded-full font-semibold transition-colors shrink-0 cursor-pointer ${
               filtroPuesto === 'todos'
                 ? 'bg-[#2C474E] text-white'
                 : 'bg-white border border-[#E4E4E7] text-[#52525B] hover:bg-zinc-100'
@@ -166,7 +304,7 @@ export const MovimientosView: React.FC<Props> = ({
               key={p.id}
               type="button"
               onClick={() => setFiltroPuesto(p.id)}
-              className={`px-2.5 py-1 text-xs rounded-full font-semibold transition-colors shrink-0 ${
+              className={`px-2.5 py-1 text-xs rounded-full font-semibold transition-colors shrink-0 cursor-pointer ${
                 filtroPuesto === p.id
                   ? 'bg-[#2C474E] text-white'
                   : 'bg-white border border-[#E4E4E7] text-[#52525B] hover:bg-zinc-100'
@@ -196,7 +334,7 @@ export const MovimientosView: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => setFiltro('todos')}
-            className={`px-2.5 py-1 text-xs rounded font-medium transition-colors shrink-0 ${
+            className={`px-2.5 py-1 text-xs rounded font-medium transition-colors shrink-0 cursor-pointer ${
               filtro === 'todos'
                 ? 'bg-[#18181B] text-white font-bold'
                 : 'bg-[#F4F4F5] text-[#52525B] hover:bg-zinc-200'
@@ -207,7 +345,7 @@ export const MovimientosView: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => setFiltro('ventas')}
-            className={`px-2.5 py-1 text-xs rounded font-medium transition-colors shrink-0 ${
+            className={`px-2.5 py-1 text-xs rounded font-medium transition-colors shrink-0 cursor-pointer ${
               filtro === 'ventas'
                 ? 'bg-[#166534] text-white font-bold'
                 : 'bg-[#F4F4F5] text-[#166534] hover:bg-green-100'
@@ -218,7 +356,7 @@ export const MovimientosView: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => setFiltro('gastos')}
-            className={`px-2.5 py-1 text-xs rounded font-medium transition-colors shrink-0 ${
+            className={`px-2.5 py-1 text-xs rounded font-medium transition-colors shrink-0 cursor-pointer ${
               filtro === 'gastos'
                 ? 'bg-[#2C474E] text-white font-bold'
                 : 'bg-[#F4F4F5] text-[#2C474E] hover:bg-zinc-200'
@@ -229,7 +367,7 @@ export const MovimientosView: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => setFiltro('personal')}
-            className={`px-2.5 py-1 text-xs rounded font-medium transition-colors shrink-0 ${
+            className={`px-2.5 py-1 text-xs rounded font-medium transition-colors shrink-0 cursor-pointer ${
               filtro === 'personal'
                 ? 'bg-[#4B5563] text-white font-bold'
                 : 'bg-[#F4F4F5] text-[#4B5563] hover:bg-zinc-200'
@@ -271,10 +409,143 @@ export const MovimientosView: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Items del Día */}
+              {/* Items del Día: Tarjetas unificadas de cierre diario + Movimientos individuales */}
               <div className="divide-y divide-[#E4E4E7]">
-                {grupo.items.map((item) => {
-                  const nombrePuesto = (item.puesto?.nombre) || (item.puesto_id ? mapaPuestos[item.puesto_id] : null);
+                {grupo.elementos.map((elem) => {
+                  if (elem.tipo === 'cierre') {
+                    const cierre = elem;
+                    const estaExpandido = Boolean(cierresExpandidos[cierre.key]);
+
+                    return (
+                      <div
+                        key={cierre.key}
+                        className="bg-white transition-colors"
+                      >
+                        {/* Cabecera Clickeable para Expandir/Contraer */}
+                        <div
+                          onClick={() => toggleCierre(cierre.key)}
+                          className="p-3 flex items-center justify-between gap-2 hover:bg-zinc-50 cursor-pointer transition-colors"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                              {/* Insignia Cierre Diario */}
+                              <span className="text-[10px] font-bold text-[#2C474E] bg-zinc-100 border border-zinc-200 px-1.5 py-0.5 rounded">
+                                Cierre Diario
+                              </span>
+                              {/* Insignia Verde del Puesto */}
+                              <span className="text-[10px] font-bold text-[#166534] bg-[#ECFDF5] border border-[#BBF7D0] px-1.5 py-0.5 rounded flex items-center gap-1">
+                                <Store size={10} />
+                                <span>{cierre.puestoNombre}</span>
+                              </span>
+                              {/* Contador de métodos incluidos */}
+                              <span className="text-[10px] text-[#52525B] bg-zinc-100 px-1.5 py-0.5 rounded border border-zinc-200">
+                                {cierre.items.length} {cierre.items.length === 1 ? 'método' : 'métodos'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px] text-[#52525B]">
+                              <span className="tabular-nums font-medium">
+                                Total en Bs: {formatVES(cierre.totalBs)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            {/* Total Sumado en USD */}
+                            <div className="text-right">
+                              <span className="block text-xs sm:text-sm font-black tabular-nums text-[#166534]">
+                                +{formatUSD(cierre.totalUSD)}
+                              </span>
+                            </div>
+
+                            {/* Botones Rápidos y Flecha */}
+                            <div className="flex items-center gap-1 border-l border-[#E4E4E7] pl-2 ml-1">
+                              {/* Editar Cierre */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCierreParaEditar({
+                                    puestoId: cierre.puestoId,
+                                    fecha: cierre.fecha,
+                                  });
+                                  setModalCierreAbierto(true);
+                                }}
+                                className="p-1.5 text-[#52525B] hover:text-[#2C474E] hover:bg-zinc-100 rounded transition-colors cursor-pointer"
+                                title="Editar cierre de puesto"
+                              >
+                                <Pencil size={14} />
+                              </button>
+
+                              {/* Eliminar Cierre */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEliminarCierre(cierre);
+                                }}
+                                className="p-1.5 text-[#52525B] hover:text-[#991B1B] hover:bg-red-50 rounded transition-colors cursor-pointer"
+                                title="Eliminar cierre completo"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+
+                              {/* Flecha Desplegar */}
+                              <div className="p-1 text-zinc-400">
+                                {estaExpandido ? (
+                                  <ChevronUp size={16} />
+                                ) : (
+                                  <ChevronDown size={16} />
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Detalle Desplegable con los movimientos que componen el cierre */}
+                        {estaExpandido && (
+                          <div className="bg-[#FAFAFA] border-t border-[#E4E4E7] px-3.5 py-2.5 space-y-2">
+                            <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">
+                              Desglose de Métodos del Cierre ({cierre.puestoNombre} • {cierre.fecha}):
+                            </span>
+                            <div className="divide-y divide-zinc-200 bg-white border border-zinc-200 rounded-lg overflow-hidden">
+                              {cierre.items.map((m) => {
+                                const { monto_usd, monto_bs } = calcularMontos(m);
+                                const tasaItem = m.tasa_aplicada || m.tasa || tasaDia;
+
+                                return (
+                                  <div
+                                    key={m.id}
+                                    className="p-2.5 flex items-center justify-between text-xs hover:bg-zinc-50/50"
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-bold text-[#18181B]">
+                                        {METODOS_PAGO_LABELS[m.metodo_pago] || m.metodo_pago}
+                                      </span>
+                                      <span className="text-[10px] text-zinc-400 font-mono">
+                                        (Tasa: {formatNumber(tasaItem)} Bs/$)
+                                      </span>
+                                    </div>
+                                    <div className="text-right">
+                                      <span className="font-mono font-bold text-[#166534] mr-2.5">
+                                        +{formatUSD(monto_usd)}
+                                      </span>
+                                      <span className="font-mono text-[11px] text-zinc-500">
+                                        {formatVES(monto_bs)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  // Movimiento Individual (Gastos, retiros o ventas manuales)
+                  const item = elem.movimiento;
+                  const nombrePuesto = item.puesto?.nombre || (item.puesto_id ? mapaPuestos[item.puesto_id] : null);
 
                   return (
                     <div
@@ -288,7 +559,7 @@ export const MovimientosView: React.FC<Props> = ({
                           </span>
                           <BadgeNaturaleza naturaleza={item.naturaleza} tipo={item.tipo} />
                           <span className="text-[10px] text-[#52525B] bg-zinc-100 px-1.5 py-0.5 rounded border border-zinc-200">
-                            {METODOS_PAGO_LABELS[item.metodo_pago]}
+                            {METODOS_PAGO_LABELS[item.metodo_pago] || item.metodo_pago}
                           </span>
                           {/* BADGE DEL PUESTO DE VENTA */}
                           {nombrePuesto && (
@@ -325,7 +596,7 @@ export const MovimientosView: React.FC<Props> = ({
                               setMovimientoParaEditar(item);
                               setModalAbierto(true);
                             }}
-                            className="p-1.5 text-[#52525B] hover:text-[#2C474E] hover:bg-zinc-100 rounded"
+                            className="p-1.5 text-[#52525B] hover:text-[#2C474E] hover:bg-zinc-100 rounded transition-colors cursor-pointer"
                             title="Editar movimiento"
                           >
                             <Pencil size={14} />
@@ -333,7 +604,7 @@ export const MovimientosView: React.FC<Props> = ({
                           <button
                             type="button"
                             onClick={() => handleEliminar(item.id)}
-                            className="p-1.5 text-[#52525B] hover:text-[#991B1B] hover:bg-red-50 rounded"
+                            className="p-1.5 text-[#52525B] hover:text-[#991B1B] hover:bg-red-50 rounded transition-colors cursor-pointer"
                             title="Eliminar movimiento"
                           >
                             <Trash2 size={14} />
@@ -349,7 +620,7 @@ export const MovimientosView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Modal para Nuevo o Editar Movimiento */}
+      {/* Modal para Nuevo o Editar Movimiento General */}
       <ModalMovimiento
         isOpen={modalAbierto}
         movimientoAEditar={movimientoParaEditar}
@@ -360,6 +631,19 @@ export const MovimientosView: React.FC<Props> = ({
           setMovimientoParaEditar(null);
         }}
         onGuardar={handleGuardarModal}
+      />
+
+      {/* Modal Cierre de Puesto (Administrador) */}
+      <ModalCierrePuesto
+        isOpen={modalCierreAbierto}
+        onClose={() => {
+          setModalCierreAbierto(false);
+          setCierreParaEditar(null);
+        }}
+        puestos={puestos}
+        tasaActual={tasaDia}
+        movimientos={movimientos}
+        cierreInicial={cierreParaEditar}
       />
     </div>
   );

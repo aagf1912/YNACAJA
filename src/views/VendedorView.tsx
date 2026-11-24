@@ -42,8 +42,32 @@ export const VendedorView: React.FC<Props> = ({
   // Pestaña activa en el menú inferior del vendedor
   const [tabActiva, setTabActiva] = useState<'cierre' | 'ganancias'>('cierre');
 
-  // Fecha fija estricta de HOY en Venezuela (UTC-4)
+  // Fecha fija estricta de HOY y AYER en Venezuela (UTC-4)
   const fechaHoyVzla = useMemo(() => getVenezuelaDate(), []);
+  const fechaAyerVzla = useMemo(() => {
+    const [y, m, d] = fechaHoyVzla.split('-').map(Number);
+    const dt = new Date(y, m - 1, d, 12, 0, 0);
+    dt.setDate(dt.getDate() - 1);
+    const yA = dt.getFullYear();
+    const mA = String(dt.getMonth() + 1).padStart(2, '0');
+    const dA = String(dt.getDate()).padStart(2, '0');
+    return `${yA}-${mA}-${dA}`;
+  }, [fechaHoyVzla]);
+
+  const formatDiaMes = (fechaStr: string) => {
+    const [y, m, d] = fechaStr.split('-').map(Number);
+    const dt = new Date(y, m - 1, d, 12, 0, 0);
+    const diaNum = dt.getDate();
+    const mes = dt.toLocaleString('es-VE', { month: 'short' }).replace('.', '');
+    return `${diaNum} ${mes.charAt(0).toUpperCase() + mes.slice(1)}`;
+  };
+  const labelHoy = useMemo(() => formatDiaMes(fechaHoyVzla), [fechaHoyVzla]);
+  const labelAyer = useMemo(() => formatDiaMes(fechaAyerVzla), [fechaAyerVzla]);
+
+  // Selección de fecha en Cierre de Caja: 'hoy' o 'ayer' (plazo de 1 día)
+  const [diaSeleccionado, setDiaSeleccionado] = useState<'hoy' | 'ayer'>('hoy');
+  const fechaSeleccionada = diaSeleccionado === 'hoy' ? fechaHoyVzla : fechaAyerVzla;
+  const fechaSeleccionadaTexto = diaSeleccionado === 'hoy' ? `Hoy (${labelHoy})` : `Ayer (${labelAyer})`;
 
   // Tasa oficial sincronizada con Supabase (tasa_bcv_oficial)
   const [tasaEfectiva, setTasaEfectiva] = useState<number>(tasaDia > 0 ? tasaDia : 0);
@@ -116,7 +140,7 @@ export const VendedorView: React.FC<Props> = ({
 
   // Estados de guardado, mensaje y toast
   const [guardando, setGuardando] = useState<boolean>(false);
-  const [tieneCierreGuardadoHoy, setTieneCierreGuardadoHoy] = useState<boolean>(false);
+  const [tieneCierreGuardado, setTieneCierreGuardado] = useState<boolean>(false);
   const [toastMensaje, setToastMensaje] = useState<string | null>(null);
   const [mensajeExito, setMensajeExito] = useState<string | null>(null);
   const [mensajeError, setMensajeError] = useState<string | null>(null);
@@ -191,18 +215,18 @@ export const VendedorView: React.FC<Props> = ({
     return getSemanaLunesSabado(fechaHoyVzla);
   }, [fechaHoyVzla]);
 
-  // Cargar en el formulario ÚNICAMENTE los registros guardados de HOY mediante fetch directo
-  const cargarCierreDeHoy = useCallback(async () => {
-    let movsHoy: any[] = movimientos.filter(
+  // Cargar en el formulario los registros del día seleccionado (Hoy o Ayer) mediante fetch directo
+  const cargarCierre = useCallback(async (fechaACargar: string) => {
+    let movsFecha: any[] = movimientos.filter(
       (m) =>
         (!perfil.puesto_id || m.puesto_id === perfil.puesto_id) &&
-        m.fecha === fechaHoyVzla
+        m.fecha === fechaACargar
     );
 
     const token = getAccessTokenFromStorage() || supabaseAnonKey;
     if (perfil.puesto_id) {
       try {
-        const url = `${supabaseUrl}/rest/v1/movimientos?puesto_id=eq.${perfil.puesto_id}&fecha=eq.${fechaHoyVzla}&select=*`;
+        const url = `${supabaseUrl}/rest/v1/movimientos?puesto_id=eq.${perfil.puesto_id}&fecha=eq.${fechaACargar}&select=*`;
         const res = await fetch(url, {
           method: 'GET',
           headers: {
@@ -213,11 +237,11 @@ export const VendedorView: React.FC<Props> = ({
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data)) {
-            movsHoy = data;
+            movsFecha = data;
           }
         }
       } catch (e) {
-        console.warn('Aviso cargando movimientos de hoy directo via fetch:', e);
+        console.warn('Aviso cargando movimientos directo via fetch:', e);
       }
     }
 
@@ -226,7 +250,7 @@ export const VendedorView: React.FC<Props> = ({
     let ptBs = 0;
     let divUSD = 0;
 
-    for (const m of movsHoy) {
+    for (const m of movsFecha) {
       const tipo = (m.tipo || '').toLowerCase();
       const metodo = (m.metodo_pago || '').toLowerCase();
       const orig = Number(m.monto_original) || 0;
@@ -247,25 +271,30 @@ export const VendedorView: React.FC<Props> = ({
     }
 
     const hayDatos = efBs > 0 || pmBs > 0 || ptBs > 0 || divUSD > 0;
-    setTieneCierreGuardadoHoy(hayDatos);
+    setTieneCierreGuardado(hayDatos);
 
     if (hayDatos) {
       setMontoEfectivoBs(efBs > 0 ? String(efBs) : '');
       setMontoPagoMovilBs(pmBs > 0 ? String(pmBs) : '');
       setMontoPuntoVentaBs(ptBs > 0 ? String(ptBs) : '');
       setMontoDivisasUSD(divUSD > 0 ? String(divUSD) : '');
+    } else {
+      setMontoEfectivoBs('');
+      setMontoPagoMovilBs('');
+      setMontoPuntoVentaBs('');
+      setMontoDivisasUSD('');
     }
-  }, [movimientos, perfil.puesto_id, fechaHoyVzla]);
+  }, [movimientos, perfil.puesto_id]);
 
-  // Al montar, cuando se cambie de pestaña o se actualicen los movimientos, sincronizar cierre de hoy
+  // Al montar, cuando se cambie de pestaña o se cambie la fecha seleccionada, sincronizar cierre
   useEffect(() => {
     if (tabActiva === 'cierre') {
-      cargarCierreDeHoy();
+      cargarCierre(fechaSeleccionada);
     }
-  }, [tabActiva, cargarCierreDeHoy]);
+  }, [tabActiva, fechaSeleccionada, cargarCierre]);
 
-  // Resumen en vivo de los montos que el vendedor escribe para hoy (solo ventas, sin deducciones de gastos)
-  const resumenCierreHoy = useMemo(() => {
+  // Resumen en vivo de los montos que el vendedor escribe (solo ventas, sin deducciones de gastos)
+  const resumenCierre = useMemo(() => {
     const efBs = parseFloat(montoEfectivoBs) || 0;
     const pmBs = parseFloat(montoPagoMovilBs) || 0;
     const ptBs = parseFloat(montoPuntoVentaBs) || 0;
@@ -288,7 +317,7 @@ export const VendedorView: React.FC<Props> = ({
     };
   }, [montoEfectivoBs, montoPagoMovilBs, montoPuntoVentaBs, montoDivisasUSD, tasaEfectiva, tasaDia, comisionPorcentaje]);
 
-  // Guardar Cierre del Día (Exclusivamente de HOY) con try/catch/finally garantizado y timeout
+  // Guardar Cierre del Día (Hoy o Ayer) con try/catch/finally garantizado y timeout
   const handleGuardarCierre = async () => {
     if (guardando) return;
 
@@ -317,7 +346,6 @@ export const VendedorView: React.FC<Props> = ({
 
     try {
       const tasa = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
-      const fechaHoy = fechaHoyVzla;
       const token = getAccessTokenFromStorage() || supabaseAnonKey;
 
       const res = await fetch(`${supabaseUrl}/rest/v1/rpc/guardar_cierre_diario`, {
@@ -335,7 +363,7 @@ export const VendedorView: React.FC<Props> = ({
           p_gasto_bs: 0,
           p_gasto_desc: '',
           p_tasa: tasa,
-          p_fecha: fechaHoy,
+          p_fecha: fechaSeleccionada,
         }),
         signal: controller.signal,
       });
@@ -352,16 +380,17 @@ export const VendedorView: React.FC<Props> = ({
         throw new Error(errMsg);
       }
 
-      setTieneCierreGuardadoHoy(true);
-      setToastMensaje('Cierre del día guardado correctamente');
-      setMensajeExito('Cierre del día guardado correctamente');
+      setTieneCierreGuardado(true);
+      const msgOk = `Cierre (${fechaSeleccionadaTexto}) guardado correctamente`;
+      setToastMensaje(msgOk);
+      setMensajeExito(msgOk);
       setTimeout(() => {
         setToastMensaje(null);
         setMensajeExito(null);
       }, 4000);
 
-      // Recargar los datos de la semana sin bloquear el botón
-      await cargarCierreDeHoy();
+      // Recargar los datos del cierre y el estado de liquidaciones
+      await cargarCierre(fechaSeleccionada);
       await cargarLiquidaciones();
     } catch (err: any) {
       console.error('Error al guardar cierre de caja:', err);
@@ -574,13 +603,35 @@ export const VendedorView: React.FC<Props> = ({
               </span>
             </div>
 
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
+            {/* SELECTOR SEGMENTADO DE FECHA: HOY VS AYER */}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-[#52525B]">
                 <Calendar size={15} className="text-[#2C474E]" />
-                <span className="text-xs font-semibold text-[#52525B]">Fecha del Cierre:</span>
-                <span className="text-xs font-bold text-[#18181B] bg-zinc-100 border border-zinc-200 px-2 py-0.5 rounded-md">
-                  Hoy, {fechaHoyTexto}
-                </span>
+                <span>Fecha del Cierre:</span>
+              </div>
+              <div className="flex items-center p-1 bg-zinc-100 rounded-lg border border-zinc-200">
+                <button
+                  type="button"
+                  onClick={() => setDiaSeleccionado('hoy')}
+                  className={`py-1 px-3 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                    diaSeleccionado === 'hoy'
+                      ? 'bg-[#2C474E] text-white shadow-xs'
+                      : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/60'
+                  }`}
+                >
+                  Hoy ({labelHoy})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiaSeleccionado('ayer')}
+                  className={`py-1 px-3 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                    diaSeleccionado === 'ayer'
+                      ? 'bg-[#2C474E] text-white shadow-xs'
+                      : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/60'
+                  }`}
+                >
+                  Ayer ({labelAyer})
+                </button>
               </div>
             </div>
           </div>
@@ -588,7 +639,7 @@ export const VendedorView: React.FC<Props> = ({
           {/* 4 CAMPOS NUMÉRICOS CLAROS DE VENTAS */}
           <div className="bg-white border border-[#E4E4E7] rounded-xl p-4 shadow-xs space-y-3">
             <span className="block text-xs font-bold text-[#18181B] uppercase tracking-wide pb-1 border-b border-[#E4E4E7]">
-              Ventas del Día ({fechaHoyTexto})
+              Ventas del Día ({fechaSeleccionadaTexto})
             </span>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -698,15 +749,15 @@ export const VendedorView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* TARJETA DE RESUMEN EN VIVO DE HOY */}
+          {/* TARJETA DE RESUMEN EN VIVO */}
           <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl p-3.5 sm:p-4 shadow-xs">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <span className="text-[11px] text-[#065F46] block font-semibold">
-                  Total Vendido Hoy ($):
+                  Total Vendido ({diaSeleccionado === 'hoy' ? 'Hoy' : 'Ayer'}) ($):
                 </span>
                 <div className="text-xl sm:text-2xl font-black tabular-nums text-[#065F46]">
-                  {formatUSD(resumenCierreHoy.totalVendidoUSD)}
+                  {formatUSD(resumenCierre.totalVendidoUSD)}
                 </div>
                 <span className="text-[10px] text-[#047857]">
                   Tasa: {formatNumber(tasaEfectiva > 0 ? tasaEfectiva : tasaDia)} Bs/$
@@ -715,10 +766,10 @@ export const VendedorView: React.FC<Props> = ({
 
               <div className="sm:border-l sm:border-[#A7F3D0] sm:pl-3">
                 <span className="text-[11px] text-[#065F46] block font-semibold">
-                  Tu Comisión del Día ({comisionPorcentaje}%):
+                  Tu Comisión ({diaSeleccionado === 'hoy' ? 'del Día' : 'de Ayer'}) ({comisionPorcentaje}%):
                 </span>
                 <div className="text-lg sm:text-2xl font-black tabular-nums text-[#047857] font-mono">
-                  ({formatUSD(resumenCierreHoy.comisionUSD)})
+                  ({formatUSD(resumenCierre.comisionUSD)})
                 </div>
                 <span className="text-[10px] text-[#059669]">
                   Calculada sobre venta bruta
@@ -732,30 +783,30 @@ export const VendedorView: React.FC<Props> = ({
                 <div className="text-xs font-bold text-[#18181B] flex justify-between gap-1">
                   <span>Efectivo Bs:</span>
                   <span className="font-mono tabular-nums text-[#166534]">
-                    {formatVES(resumenCierreHoy.efectivoBsFisico)}
+                    {formatVES(resumenCierre.efectivoBsFisico)}
                   </span>
                 </div>
                 <div className="text-xs font-bold text-[#18181B] flex justify-between gap-1 mt-0.5">
                   <span>Divisas $:</span>
                   <span className="font-mono tabular-nums text-[#059669]">
-                    {formatUSD(resumenCierreHoy.divisasUSDFisico)}
+                    {formatUSD(resumenCierre.divisasUSDFisico)}
                   </span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* AVISO VERDE SI YA HAY CIERRE GUARDADO HOY */}
-          {tieneCierreGuardadoHoy && (
+          {/* AVISO VERDE SI YA HAY CIERRE GUARDADO */}
+          {tieneCierreGuardado && (
             <div className="p-3 bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl text-xs text-[#065F46] flex items-center gap-2">
               <CheckCircle2 size={16} className="text-[#10B981] shrink-0" />
               <span className="font-semibold">
-                ✓ Cierre de hoy guardado (podés modificar los montos si necesitás corregir algo)
+                ✓ Cierre guardado (podés modificar los montos si necesitás corregir algo)
               </span>
             </div>
           )}
 
-          {/* BOTÓN GUARDAR / ACTUALIZAR CIERRE DEL DÍA */}
+          {/* BOTÓN GUARDAR / ACTUALIZAR CIERRE */}
           <button
             type="button"
             onClick={handleGuardarCierre}
@@ -765,13 +816,13 @@ export const VendedorView: React.FC<Props> = ({
             {guardando ? (
               <>
                 <Loader2 size={16} className="animate-spin text-white" />
-                <span>{tieneCierreGuardadoHoy ? 'Actualizando Cierre del Día...' : 'Guardando Cierre del Día...'}</span>
+                <span>{tieneCierreGuardado ? 'Actualizando Cierre...' : 'Guardando Cierre...'}</span>
               </>
             ) : (
               <>
                 <CheckCircle2 size={17} className="text-[#86EFAC]" />
                 <span>
-                  {tieneCierreGuardadoHoy ? 'Actualizar Cierre del Día' : `Guardar Cierre del Día (${fechaHoyTexto})`}
+                  {tieneCierreGuardado ? `Actualizar Cierre (${fechaSeleccionadaTexto})` : `Guardar Cierre (${fechaSeleccionadaTexto})`}
                 </span>
               </>
             )}
