@@ -108,40 +108,31 @@ export const BalanceView: React.FC<Props> = ({
     );
   }, [movimientos, infoSemana.semanaInicio, infoSemana.semanaFin]);
 
-  // Comprobar si un puesto ya fue liquidado en esta semana (anti-doble pago)
-  const isPuestoLiquidado = useCallback(
-    (puestoId: string) => {
-      return liquidaciones.some(
-        (l) =>
-          l.puesto_id === puestoId &&
-          l.semana_inicio === infoSemana.semanaInicio &&
-          (l.pagado !== false || (l as any).monto_pagado_bs > 0)
-      );
-    },
-    [liquidaciones, infoSemana.semanaInicio]
-  );
-
   // Estado para el modal de pago de comisiones
   interface ModalPagarComisionData {
     puestoId: string;
     puestoNombre: string;
     totalVentasUSD: number;
     comisionPorcentaje: number;
-    comisionUSD: number;
+    comisionUSD: number; // Monto exacto a liquidar en esta transacción (saldo pendiente)
+    comisionTotalUSD: number;
+    yaPagadoUSD: number;
   }
   const [pagoModalData, setPagoModalData] = useState<ModalPagarComisionData | null>(null);
   const [tasaPagoComision, setTasaPagoComision] = useState<string>('');
   const [metodoPagoComision, setMetodoPagoComision] = useState<'pago_movil' | 'efectivo_bs'>('pago_movil');
 
-  // Abrir modal de pago de comisión con datos precargados
+  // Abrir modal de pago de comisión con datos precargados (liquidar saldo pendiente)
   const handleAbrirModalPago = (p: {
     id: string;
     nombre: string;
     totalUSD: number;
     porcentaje: number;
     comisionUSD: number;
+    yaPagadoUsd: number;
+    pendienteUsd: number;
   }) => {
-    if (isPuestoLiquidado(p.id) || p.comisionUSD <= 0) return;
+    if (p.pendienteUsd <= 0) return;
     setTasaPagoComision(tasaActual > 0 ? String(tasaActual) : '100');
     setMetodoPagoComision('pago_movil');
     setPagoModalData({
@@ -149,7 +140,9 @@ export const BalanceView: React.FC<Props> = ({
       puestoNombre: p.nombre,
       totalVentasUSD: p.totalUSD,
       comisionPorcentaje: p.porcentaje,
-      comisionUSD: p.comisionUSD,
+      comisionUSD: p.pendienteUsd,
+      comisionTotalUSD: p.comisionUSD,
+      yaPagadoUSD: p.yaPagadoUsd,
     });
   };
 
@@ -259,7 +252,7 @@ export const BalanceView: React.FC<Props> = ({
       };
     }, [movimientosSemanaFiltrados]);
 
-  // 2. Resumen por Puesto de Venta (Ventas, Comisión 22% y Neto)
+  // 2. Resumen por Puesto de Venta (Ventas, Comisión, Liquidaciones Parciales y Saldo Pendiente)
   const resumenPorPuesto = useMemo(() => {
     const items = puestos.map((p) => {
       const ventasPuesto = movimientosSemana.filter(
@@ -275,8 +268,24 @@ export const BalanceView: React.FC<Props> = ({
       }
 
       const pct = Number(p.porcentaje_comision) || 22.0;
-      const comisionUSD = (totalUSD * pct) / 100;
-      const netoUSD = totalUSD - comisionUSD;
+      const comisionUSD = Math.round(((totalUSD * pct) / 100) * 100) / 100;
+      const netoUSD = Math.round((totalUSD - comisionUSD) * 100) / 100;
+
+      // Sumar todas las liquidaciones (pagos totales o parciales) de esta semana para este puesto
+      const liqsPuesto = liquidaciones.filter(
+        (l) => l.puesto_id === p.id && l.semana_inicio === infoSemana.semanaInicio
+      );
+
+      let yaPagadoUsd = 0;
+      let yaPagadoBs = 0;
+      for (const l of liqsPuesto) {
+        yaPagadoUsd += Number(l.monto_comision_usd ?? l.monto_usd ?? 0);
+        yaPagadoBs += Number((l as any).monto_pagado_bs ?? l.monto_bs ?? 0);
+      }
+      yaPagadoUsd = Math.round(yaPagadoUsd * 100) / 100;
+      yaPagadoBs = Math.round(yaPagadoBs * 100) / 100;
+
+      const pendienteUsd = Math.max(0, Number((comisionUSD - yaPagadoUsd).toFixed(2)));
 
       return {
         id: p.id,
@@ -287,6 +296,9 @@ export const BalanceView: React.FC<Props> = ({
         totalBs,
         comisionUSD,
         netoUSD,
+        yaPagadoUsd,
+        yaPagadoBs,
+        pendienteUsd,
       };
     });
 
@@ -311,20 +323,27 @@ export const BalanceView: React.FC<Props> = ({
         totalBs: totalSinPuestoBs,
         comisionUSD: 0,
         netoUSD: totalSinPuestoUSD,
+        yaPagadoUsd: 0,
+        yaPagadoBs: 0,
+        pendienteUsd: 0,
       });
     }
 
     const totalVentas = items.reduce((acc, i) => acc + i.totalUSD, 0);
     const totalComision = items.reduce((acc, i) => acc + i.comisionUSD, 0);
     const totalNeto = items.reduce((acc, i) => acc + i.netoUSD, 0);
+    const totalYaPagado = items.reduce((acc, i) => acc + i.yaPagadoUsd, 0);
+    const totalPendiente = items.reduce((acc, i) => acc + i.pendienteUsd, 0);
 
     return {
       items,
       totalVentas,
       totalComision,
       totalNeto,
+      totalYaPagado,
+      totalPendiente,
     };
-  }, [puestos, movimientosSemana]);
+  }, [puestos, movimientosSemana, liquidaciones, infoSemana.semanaInicio]);
 
   // 3. Resumen de Ingresos por Método de Pago
   const ingresosPorMetodo = useMemo(() => {
@@ -811,7 +830,6 @@ export const BalanceView: React.FC<Props> = ({
               </thead>
               <tbody className="divide-y divide-[#E4E4E7]">
                 {resumenPorPuesto.items.map((p) => {
-                  const liquidado = isPuestoLiquidado(p.id);
                   return (
                     <tr key={p.id} className="hover:bg-zinc-50 transition-colors">
                       <td className="py-2.5 px-3 font-bold text-[#18181B]">
@@ -829,18 +847,23 @@ export const BalanceView: React.FC<Props> = ({
                         {formatUSD(p.totalUSD)}
                       </td>
                       <td className="py-2.5 px-3 text-right tabular-nums font-bold text-[#047857] font-mono">
-                        ({formatUSD(p.comisionUSD)})
+                        <div>({formatUSD(p.comisionUSD)})</div>
+                        {p.yaPagadoUsd > 0 && (
+                          <div className="text-[10px] text-[#166534] font-normal font-sans">
+                            Pagado: {formatUSD(p.yaPagadoUsd)}
+                          </div>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 text-right tabular-nums font-black text-[#166534]">
                         {formatUSD(p.netoUSD)}
                       </td>
                       <td className="py-2.5 px-3 text-right">
-                        {liquidado ? (
+                        {p.pendienteUsd === 0 && p.comisionUSD > 0 ? (
                           <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#ECFDF5] text-[#166534] border border-[#A7F3D0]">
                             <CheckCircle2 size={12} />
                             <span>Pagado ✓</span>
                           </span>
-                        ) : p.comisionUSD > 0 && p.id !== 'sin-puesto' ? (
+                        ) : p.pendienteUsd > 0 && p.id !== 'sin-puesto' ? (
                           <button
                             type="button"
                             onClick={() => handleAbrirModalPago(p)}
@@ -855,7 +878,11 @@ export const BalanceView: React.FC<Props> = ({
                             ) : (
                               <>
                                 <CheckCircle2 size={12} className="text-[#86EFAC]" />
-                                <span>Pagar Comisión ({formatUSD(p.comisionUSD)})</span>
+                                <span>
+                                  {p.yaPagadoUsd > 0
+                                    ? `Pagar Saldo (${formatUSD(p.pendienteUsd)})`
+                                    : `Pagar Comisión (${formatUSD(p.pendienteUsd)})`}
+                                </span>
                               </>
                             )}
                           </button>
@@ -877,7 +904,12 @@ export const BalanceView: React.FC<Props> = ({
                     {formatUSD(resumenPorPuesto.totalVentas)}
                   </td>
                   <td className="py-2.5 px-3 text-right tabular-nums text-[#047857] font-mono">
-                    ({formatUSD(resumenPorPuesto.totalComision)})
+                    <div>({formatUSD(resumenPorPuesto.totalComision)})</div>
+                    {resumenPorPuesto.totalYaPagado > 0 && (
+                      <div className="text-[10px] text-[#166534] font-normal font-sans">
+                        Pagado: {formatUSD(resumenPorPuesto.totalYaPagado)}
+                      </div>
+                    )}
                   </td>
                   <td className="py-2.5 px-3 text-right tabular-nums text-[#166534]">
                     {formatUSD(resumenPorPuesto.totalNeto)}
@@ -1263,7 +1295,9 @@ export const BalanceView: React.FC<Props> = ({
                   <CheckCircle2 size={18} />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold leading-tight">Pagar Comisión Semanal</h3>
+                  <h3 className="text-sm font-bold leading-tight">
+                    {pagoModalData.yaPagadoUSD > 0 ? 'Pagar Saldo de Comisión' : 'Pagar Comisión Semanal'}
+                  </h3>
                   <p className="text-[11px] text-zinc-300">
                     {pagoModalData.puestoNombre} • {rangoTexto} (Lun - Sáb)
                   </p>
@@ -1280,15 +1314,23 @@ export const BalanceView: React.FC<Props> = ({
 
             {/* Contenido */}
             <div className="p-4 sm:p-5 space-y-4">
-              {/* Cifra acumulada en USD */}
+              {/* Cifra acumulada o saldo a liquidar en USD */}
               <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl flex items-center justify-between">
                 <div>
                   <span className="text-[11px] font-semibold text-zinc-500 block">
-                    Comisión Acumulada ({pagoModalData.comisionPorcentaje}%):
+                    {pagoModalData.yaPagadoUSD > 0
+                      ? 'Saldo Pendiente a Liquidar:'
+                      : `Comisión a Liquidar (${pagoModalData.comisionPorcentaje}%):`}
                   </span>
-                  <span className="text-[10px] text-zinc-400">
-                    Congelada según tasa de cada día trabajado
-                  </span>
+                  {pagoModalData.yaPagadoUSD > 0 ? (
+                    <span className="text-[10px] text-zinc-500 block">
+                      Total: {formatUSD(pagoModalData.comisionTotalUSD)} • Ya pagado: {formatUSD(pagoModalData.yaPagadoUSD)}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-zinc-400">
+                      Congelada según tasa de cada día trabajado
+                    </span>
+                  )}
                 </div>
                 <div className="text-xl sm:text-2xl font-black font-mono text-[#047857] tabular-nums">
                   {formatUSD(pagoModalData.comisionUSD)}

@@ -192,16 +192,21 @@ export const VendedorView: React.FC<Props> = ({
     return getSemanaLunesSabado(fechaHoyVzla);
   }, [fechaHoyVzla]);
 
-  // Comprobar si la semana de HOY está bloqueada como pagada en liquidaciones_semanales
+  // Comprobar si el día de HOY está bloqueado por una liquidación que cubra esta fecha
   const semanaHoyPagada = useMemo(() => {
     if (!perfil.puesto_id) return false;
-    return liquidaciones.some(
-      (l) =>
-        l.puesto_id === perfil.puesto_id &&
-        l.semana_inicio === infoSemanaHoy.semanaInicio &&
-        l.pagado !== false
-    );
-  }, [liquidaciones, perfil.puesto_id, infoSemanaHoy.semanaInicio]);
+    return liquidaciones.some((l) => {
+      if (l.puesto_id !== perfil.puesto_id || l.semana_inicio !== infoSemanaHoy.semanaInicio) {
+        return false;
+      }
+      if (l.pagado === false) return false;
+      // Fecha límite cubierta por la liquidación (ej. hasta_fecha o fecha_pago si fue antes de fin de semana)
+      const hastaFecha =
+        (l as any).hasta_fecha ||
+        (l.fecha_pago && l.fecha_pago < l.semana_fin ? l.fecha_pago : l.semana_fin);
+      return fechaHoyVzla <= hastaFecha;
+    });
+  }, [liquidaciones, perfil.puesto_id, infoSemanaHoy.semanaInicio, fechaHoyVzla]);
 
   // Cargar en el formulario ÚNICAMENTE los registros guardados de HOY mediante fetch directo
   const cargarCierreDeHoy = useCallback(async () => {
@@ -405,100 +410,34 @@ export const VendedorView: React.FC<Props> = ({
     return getSemanaLunesSabado(semanaGananciasBase);
   }, [semanaGananciasBase]);
 
-  // Liquidación de la semana seleccionada si está registrada o pagada
-  const liquidacionSemanaActual = useMemo(() => {
-    if (!perfil.puesto_id) return null;
-    return (
-      liquidaciones.find(
-        (l) =>
-          l.puesto_id === perfil.puesto_id &&
-          l.semana_inicio === infoSemanaGanancias.semanaInicio &&
-          (l.pagado !== false || (l as any).monto_pagado_bs > 0)
-      ) || null
+  // Todas las liquidaciones registradas para la semana seleccionada
+  const liquidacionesSemana = useMemo(() => {
+    if (!perfil.puesto_id) return [];
+    return liquidaciones.filter(
+      (l) =>
+        l.puesto_id === perfil.puesto_id &&
+        l.semana_inicio === infoSemanaGanancias.semanaInicio &&
+        l.pagado !== false
     );
   }, [liquidaciones, perfil.puesto_id, infoSemanaGanancias.semanaInicio]);
 
-  const semanaGananciasPagada = Boolean(liquidacionSemanaActual);
-
-  // Comprobante informativo de cobro (Monto en Bs y Tasa BCV aplicada)
-  const [comprobantePago, setComprobantePago] = useState<{ montoBs: number; tasa: number } | null>(null);
-
-  useEffect(() => {
-    if (!liquidacionSemanaActual) {
-      setComprobantePago(null);
-      return;
+  // Sumatoria de montos pagados en USD y en Bs en la semana seleccionada
+  const { yaPagadoSemanaUSD, yaPagadoSemanaBs, tasaCobroPromedio } = useMemo(() => {
+    let usd = 0;
+    let bs = 0;
+    for (const l of liquidacionesSemana) {
+      usd += Number(l.monto_comision_usd ?? l.monto_usd ?? 0);
+      bs += Number((l as any).monto_pagado_bs ?? l.monto_bs ?? 0);
     }
-
-    // 1. Si la liquidación guardada ya contiene monto_pagado_bs / monto_bs y tasa_pago / tasa
-    const mBsDirecto = (liquidacionSemanaActual as any).monto_pagado_bs ?? liquidacionSemanaActual.monto_bs;
-    const tDirecta = (liquidacionSemanaActual as any).tasa_pago ?? liquidacionSemanaActual.tasa;
-    if (mBsDirecto && tDirecta) {
-      setComprobantePago({
-        montoBs: Number(mBsDirecto),
-        tasa: Number(tDirecta),
-      });
-      return;
-    }
-
-    // 2. Si tiene movimiento_gasto_id o movimiento_id, consultarlo
-    const movId = (liquidacionSemanaActual as any).movimiento_gasto_id || liquidacionSemanaActual.movimiento_id;
-    if (!movId) {
-      setComprobantePago(null);
-      return;
-    }
-
-    // Buscar en movimientos locales en memoria
-    const movLocal = movimientos.find((m) => m.id === movId);
-    if (movLocal) {
-      const mBs = Number(movLocal.monto_bs ?? movLocal.monto_original);
-      const t = Number(movLocal.tasa ?? movLocal.tasa_aplicada);
-      if (mBs > 0 && t > 0) {
-        setComprobantePago({ montoBs: mBs, tasa: t });
-        return;
-      }
-    }
-
-    // Si no está en memoria, consultar via fetch directo
-    const token = getAccessTokenFromStorage() || supabaseAnonKey;
-    fetch(`${supabaseUrl}/rest/v1/movimientos?id=eq.${movId}&select=*`, {
-      headers: {
-        apikey: supabaseAnonKey,
-        Authorization: `Bearer ${token}`,
-      },
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data) && data[0]) {
-          const m = data[0];
-          const mBs = Number(m.monto_bs ?? m.monto_original);
-          const t = Number(m.tasa ?? m.tasa_aplicada);
-          if (mBs > 0 && t > 0) {
-            setComprobantePago({ montoBs: mBs, tasa: t });
-          }
-        }
-      })
-      .catch((err) => console.warn('Aviso cargando comprobante de cobro:', err));
-  }, [liquidacionSemanaActual, movimientos]);
-
-  const montoCobradoBs = useMemo(() => {
-    if (!liquidacionSemanaActual) return 0;
-    return Number(
-      (liquidacionSemanaActual as any).monto_pagado_bs ??
-      liquidacionSemanaActual.monto_bs ??
-      comprobantePago?.montoBs ??
-      0
-    );
-  }, [liquidacionSemanaActual, comprobantePago]);
-
-  const tasaCobradoBcv = useMemo(() => {
-    if (!liquidacionSemanaActual) return 0;
-    return Number(
-      (liquidacionSemanaActual as any).tasa_pago ??
-      liquidacionSemanaActual.tasa ??
-      comprobantePago?.tasa ??
-      0
-    );
-  }, [liquidacionSemanaActual, comprobantePago]);
+    usd = Math.round(usd * 100) / 100;
+    bs = Math.round(bs * 100) / 100;
+    const tasa = usd > 0 && bs > 0 ? Math.round((bs / usd) * 100) / 100 : 0;
+    return {
+      yaPagadoSemanaUSD: usd,
+      yaPagadoSemanaBs: bs,
+      tasaCobroPromedio: tasa,
+    };
+  }, [liquidacionesSemana]);
 
   const movimientosSemanaGanancias = useMemo(() => {
     return movimientos.filter((m) => {
@@ -556,6 +495,11 @@ export const VendedorView: React.FC<Props> = ({
       mejorDiaIndex: maxComisionUSD > 0 ? mejorIdx : -1,
     };
   }, [datos6DiasGanancias]);
+
+  // Saldo pendiente por cobrar en la semana
+  const pendienteSemanaUSD = useMemo(() => {
+    return Math.max(0, Number((comisionSemanaUSD - yaPagadoSemanaUSD).toFixed(2)));
+  }, [comisionSemanaUSD, yaPagadoSemanaUSD]);
 
   // Día seleccionado en el gráfico interactivo de Mis Ganancias (0 a 5)
   const [diaGananciasIndex, setDiaGananciasIndex] = useState<number>(0);
@@ -925,17 +869,28 @@ export const VendedorView: React.FC<Props> = ({
               </div>
 
               <div className="sm:text-right">
-                {semanaGananciasPagada ? (
+                {pendienteSemanaUSD === 0 && comisionSemanaUSD > 0 ? (
                   <div className="flex flex-col items-start sm:items-end">
                     <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-[#166534] text-white border border-[#22c55e] shadow-xs">
                       <CheckCircle2 size={14} />
                       <span>Pagado ✓</span>
                     </span>
-                    {montoCobradoBs > 0 && tasaCobradoBcv > 0 && (
+                    {yaPagadoSemanaBs > 0 && (
                       <span className="text-[11px] text-[#86EFAC] font-mono mt-1 font-semibold">
-                        Cobrado: {formatVES(montoCobradoBs)} (Tasa BCV: {formatNumber(tasaCobradoBcv)} Bs/$)
+                        Cobrado: {formatVES(yaPagadoSemanaBs)} {tasaCobroPromedio > 0 && `(Tasa BCV: ${formatNumber(tasaCobroPromedio)} Bs/$)`}
                       </span>
                     )}
+                  </div>
+                ) : yaPagadoSemanaUSD > 0 && pendienteSemanaUSD > 0 ? (
+                  <div className="flex flex-col items-start sm:items-end gap-1.5">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full bg-[#166534] text-white border border-[#22c55e] shadow-xs">
+                      <CheckCircle2 size={13} />
+                      <span>Cobrado: {formatUSD(yaPagadoSemanaUSD)} ({formatVES(yaPagadoSemanaBs)})</span>
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40">
+                      <Clock size={12} />
+                      <span>Pendiente: {formatUSD(pendienteSemanaUSD)}</span>
+                    </span>
                   </div>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40">
