@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
-  Lock,
   Award,
   Banknote,
   Smartphone,
@@ -192,22 +191,6 @@ export const VendedorView: React.FC<Props> = ({
     return getSemanaLunesSabado(fechaHoyVzla);
   }, [fechaHoyVzla]);
 
-  // Comprobar si el día de HOY está bloqueado por una liquidación que cubra esta fecha
-  const semanaHoyPagada = useMemo(() => {
-    if (!perfil.puesto_id) return false;
-    return liquidaciones.some((l) => {
-      if (l.puesto_id !== perfil.puesto_id || l.semana_inicio !== infoSemanaHoy.semanaInicio) {
-        return false;
-      }
-      if (l.pagado === false) return false;
-      // Fecha límite cubierta por la liquidación (ej. hasta_fecha o fecha_pago si fue antes de fin de semana)
-      const hastaFecha =
-        (l as any).hasta_fecha ||
-        (l.fecha_pago && l.fecha_pago < l.semana_fin ? l.fecha_pago : l.semana_fin);
-      return fechaHoyVzla <= hastaFecha;
-    });
-  }, [liquidaciones, perfil.puesto_id, infoSemanaHoy.semanaInicio, fechaHoyVzla]);
-
   // Cargar en el formulario ÚNICAMENTE los registros guardados de HOY mediante fetch directo
   const cargarCierreDeHoy = useCallback(async () => {
     let movsHoy: any[] = movimientos.filter(
@@ -308,11 +291,6 @@ export const VendedorView: React.FC<Props> = ({
   // Guardar Cierre del Día (Exclusivamente de HOY) con try/catch/finally garantizado y timeout
   const handleGuardarCierre = async () => {
     if (guardando) return;
-
-    if (semanaHoyPagada) {
-      setMensajeError('Esta semana ya fue liquidada y pagada en nómina. Los montos no se pueden modificar.');
-      return;
-    }
 
     if (!perfil.puesto_id) {
       setMensajeError('No tienes un puesto de venta asignado a tu cuenta.');
@@ -604,25 +582,8 @@ export const VendedorView: React.FC<Props> = ({
                   Hoy, {fechaHoyTexto}
                 </span>
               </div>
-
-              {semanaHoyPagada && (
-                <div className="flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
-                  <Lock size={12} />
-                  <span>Semana Pagada</span>
-                </div>
-              )}
             </div>
           </div>
-
-          {semanaHoyPagada && (
-            <div className="p-3 bg-[#FFFBEB] border border-[#FDE68A] rounded-xl text-xs text-[#92400E] flex items-start gap-2">
-              <Lock size={15} className="shrink-0 mt-0.5 text-amber-600" />
-              <div>
-                <strong className="block font-bold">Semana pagada y cerrada</strong>
-                Esta semana ya fue liquidada en nómina. Los campos están en solo lectura.
-              </div>
-            </div>
-          )}
 
           {/* 4 CAMPOS NUMÉRICOS CLAROS DE VENTAS */}
           <div className="bg-white border border-[#E4E4E7] rounded-xl p-4 shadow-xs space-y-3">
@@ -647,7 +608,7 @@ export const VendedorView: React.FC<Props> = ({
                     inputMode="decimal"
                     value={montoEfectivoBs}
                     onChange={(e) => setMontoEfectivoBs(e.target.value)}
-                    disabled={semanaHoyPagada || guardando}
+                    disabled={guardando}
                     placeholder="0.00"
                     className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
                   />
@@ -673,7 +634,7 @@ export const VendedorView: React.FC<Props> = ({
                     inputMode="decimal"
                     value={montoPagoMovilBs}
                     onChange={(e) => setMontoPagoMovilBs(e.target.value)}
-                    disabled={semanaHoyPagada || guardando}
+                    disabled={guardando}
                     placeholder="0.00"
                     className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
                   />
@@ -699,7 +660,7 @@ export const VendedorView: React.FC<Props> = ({
                     inputMode="decimal"
                     value={montoPuntoVentaBs}
                     onChange={(e) => setMontoPuntoVentaBs(e.target.value)}
-                    disabled={semanaHoyPagada || guardando}
+                    disabled={guardando}
                     placeholder="0.00"
                     className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
                   />
@@ -725,7 +686,7 @@ export const VendedorView: React.FC<Props> = ({
                     inputMode="decimal"
                     value={montoDivisasUSD}
                     onChange={(e) => setMontoDivisasUSD(e.target.value)}
-                    disabled={semanaHoyPagada || guardando}
+                    disabled={guardando}
                     placeholder="0.00"
                     className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
                   />
@@ -798,7 +759,7 @@ export const VendedorView: React.FC<Props> = ({
           <button
             type="button"
             onClick={handleGuardarCierre}
-            disabled={semanaHoyPagada || guardando}
+            disabled={guardando}
             className="w-full min-h-[48px] px-4 py-2.5 text-xs sm:text-sm font-bold bg-[#2C474E] text-white rounded-xl hover:bg-[#23393e] active:bg-[#1a2b2f] flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
           >
             {guardando ? (
@@ -856,7 +817,7 @@ export const VendedorView: React.FC<Props> = ({
               <div>
                 <span className="text-xs text-emerald-300/90 block mb-1 font-semibold flex items-center gap-1.5">
                   <Sparkles size={14} className="text-[#86EFAC]" />
-                  Tu Ganancia de la Semana ({comisionPorcentaje}%):
+                  Ganancia Generada ({comisionPorcentaje}%):
                 </span>
                 <div className="text-3xl sm:text-4xl font-black tabular-nums text-[#86EFAC] font-mono tracking-tight">
                   {formatUSD(comisionSemanaUSD)}
@@ -870,14 +831,14 @@ export const VendedorView: React.FC<Props> = ({
 
               <div className="sm:text-right">
                 {pendienteSemanaUSD === 0 && comisionSemanaUSD > 0 ? (
-                  <div className="flex flex-col items-start sm:items-end">
+                  <div className="flex flex-col items-start sm:items-end gap-1">
                     <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-[#166534] text-white border border-[#22c55e] shadow-xs">
                       <CheckCircle2 size={14} />
-                      <span>Pagado ✓</span>
+                      <span>Pagado al 100% ✓</span>
                     </span>
                     {yaPagadoSemanaBs > 0 && (
-                      <span className="text-[11px] text-[#86EFAC] font-mono mt-1 font-semibold">
-                        Cobrado: {formatVES(yaPagadoSemanaBs)} {tasaCobroPromedio > 0 && `(Tasa BCV: ${formatNumber(tasaCobroPromedio)} Bs/$)`}
+                      <span className="text-[11px] text-[#86EFAC] font-mono mt-0.5 font-semibold">
+                        Ya Pagado: {formatUSD(yaPagadoSemanaUSD)} ({formatVES(yaPagadoSemanaBs)})
                       </span>
                     )}
                   </div>
@@ -885,9 +846,9 @@ export const VendedorView: React.FC<Props> = ({
                   <div className="flex flex-col items-start sm:items-end gap-1.5">
                     <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full bg-[#166534] text-white border border-[#22c55e] shadow-xs">
                       <CheckCircle2 size={13} />
-                      <span>Cobrado: {formatUSD(yaPagadoSemanaUSD)} ({formatVES(yaPagadoSemanaBs)})</span>
+                      <span>Ya Pagado: {formatUSD(yaPagadoSemanaUSD)} ({formatVES(yaPagadoSemanaBs)})</span>
                     </span>
-                    <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40">
+                    <span className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40">
                       <Clock size={12} />
                       <span>Pendiente: {formatUSD(pendienteSemanaUSD)}</span>
                     </span>
@@ -895,11 +856,41 @@ export const VendedorView: React.FC<Props> = ({
                 ) : (
                   <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40">
                     <Clock size={14} />
-                    <span>Pendiente</span>
+                    <span>Pendiente: {formatUSD(comisionSemanaUSD)}</span>
                   </span>
                 )}
               </div>
             </div>
+
+            {/* HISTORIAL DE ABONOS / PAGOS DE LA SEMANA */}
+            {liquidacionesSemana.length > 0 && (
+              <div className="mt-3.5 pt-3 border-t border-white/10 space-y-1.5">
+                <span className="text-[10px] uppercase font-bold text-emerald-300/80 tracking-wider block">
+                  Historial de Abonos / Pagos:
+                </span>
+                <div className="space-y-1">
+                  {liquidacionesSemana.map((l, idx) => {
+                    const fechaAbono = l.fecha_pago || (l as any).created_at?.slice(0, 10) || 'Fecha n/d';
+                    const mBs = Number((l as any).monto_pagado_bs ?? l.monto_bs ?? 0);
+                    const mUsd = Number(l.monto_comision_usd ?? l.monto_usd ?? 0);
+                    const t = Number((l as any).tasa_pago ?? l.tasa ?? 0);
+                    return (
+                      <div
+                        key={l.id || `liq-${idx}`}
+                        className="text-[11px] bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-1 text-zinc-200"
+                      >
+                        <span className="font-semibold text-zinc-300">
+                          {fechaAbono}: <span className="text-white font-mono font-bold">{formatUSD(mUsd)}</span>
+                        </span>
+                        <span className="text-[#86EFAC] font-mono font-bold">
+                          {formatVES(mBs)} {t > 0 && <span className="text-zinc-400 text-[10px] font-normal font-sans">(Tasa BCV: {formatNumber(t)} Bs/$)</span>}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* SELECTOR DE SEMANAS DE LUNES A SÁBADO */}

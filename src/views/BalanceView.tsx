@@ -119,22 +119,28 @@ export const BalanceView: React.FC<Props> = ({
     yaPagadoUSD: number;
   }
   const [pagoModalData, setPagoModalData] = useState<ModalPagarComisionData | null>(null);
+  const [montoUSDInput, setMontoUSDInput] = useState<string>('');
   const [tasaPagoComision, setTasaPagoComision] = useState<string>('');
   const [metodoPagoComision, setMetodoPagoComision] = useState<'pago_movil' | 'efectivo_bs'>('pago_movil');
 
-  // Abrir modal de pago de comisión con datos precargados (liquidar saldo pendiente)
-  const handleAbrirModalPago = (p: {
-    id: string;
-    nombre: string;
-    totalUSD: number;
-    porcentaje: number;
-    comisionUSD: number;
-    yaPagadoUsd: number;
-    pendienteUsd: number;
-  }) => {
-    if (p.pendienteUsd <= 0) return;
+  // Abrir modal de pago de comisión con datos precargados (liquidar saldo pendiente o adelanto)
+  const handleAbrirModalPago = (
+    p: {
+      id: string;
+      nombre: string;
+      totalUSD: number;
+      porcentaje: number;
+      comisionUSD: number;
+      yaPagadoUsd: number;
+      pendienteUsd: number;
+    },
+    esAdelanto = false
+  ) => {
+    if (p.id === 'sin-puesto') return;
     setTasaPagoComision(tasaActual > 0 ? String(tasaActual) : '100');
     setMetodoPagoComision('pago_movil');
+    const valorInicialUSD = esAdelanto ? '' : (p.pendienteUsd > 0 ? String(p.pendienteUsd) : '');
+    setMontoUSDInput(valorInicialUSD);
     setPagoModalData({
       puestoId: p.id,
       puestoNombre: p.nombre,
@@ -150,13 +156,19 @@ export const BalanceView: React.FC<Props> = ({
   const handleConfirmarPago = async () => {
     if (!pagoModalData || liquidandoPuestoId) return;
 
+    const montoUSDNum = parseFloat(montoUSDInput);
+    if (isNaN(montoUSDNum) || montoUSDNum <= 0) {
+      alert('Ingresa un monto en dólares ($ USD) válido mayor a 0.');
+      return;
+    }
+
     const tasaNum = parseFloat(tasaPagoComision);
     if (isNaN(tasaNum) || tasaNum <= 0) {
       alert('Ingresa una tasa BCV válida mayor a 0.');
       return;
     }
 
-    const { puestoId, totalVentasUSD, comisionPorcentaje, comisionUSD } = pagoModalData;
+    const { puestoId, totalVentasUSD, comisionPorcentaje } = pagoModalData;
     const fechaHoyVzla = getVenezuelaDate();
     const token = getAccessTokenFromStorage() || supabaseAnonKey;
 
@@ -175,7 +187,7 @@ export const BalanceView: React.FC<Props> = ({
           p_semana_fin: infoSemana.semanaFin,
           p_total_ventas_usd: totalVentasUSD,
           p_comision_porcentaje: comisionPorcentaje,
-          p_monto_comision_usd: comisionUSD,
+          p_monto_comision_usd: montoUSDNum,
           p_tasa_pago: tasaNum,
           p_metodo_pago: metodoPagoComision,
           p_fecha_pago: fechaHoyVzla,
@@ -859,32 +871,64 @@ export const BalanceView: React.FC<Props> = ({
                       </td>
                       <td className="py-2.5 px-3 text-right">
                         {p.pendienteUsd === 0 && p.comisionUSD > 0 ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#ECFDF5] text-[#166534] border border-[#A7F3D0]">
-                            <CheckCircle2 size={12} />
-                            <span>Pagado ✓</span>
-                          </span>
+                          <div className="inline-flex items-center gap-1.5 justify-end">
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#ECFDF5] text-[#166534] border border-[#A7F3D0]">
+                              <CheckCircle2 size={12} />
+                              <span>Pagado ✓</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleAbrirModalPago(p, true)}
+                              disabled={liquidandoPuestoId === p.id}
+                              className="px-2 py-0.5 rounded text-[11px] font-bold text-[#2C474E] bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 transition-colors cursor-pointer"
+                              title="Registrar pago anticipado / adelanto"
+                            >
+                              + Adelanto
+                            </button>
+                          </div>
                         ) : p.pendienteUsd > 0 && p.id !== 'sin-puesto' ? (
+                          <div className="inline-flex items-center gap-1.5 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleAbrirModalPago(p, false)}
+                              disabled={liquidandoPuestoId === p.id}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#166534] hover:bg-[#14532d] active:bg-[#0f3d21] text-white shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+                            >
+                              {liquidandoPuestoId === p.id ? (
+                                <>
+                                  <Loader2 size={12} className="animate-spin text-white" />
+                                  <span>Pagando...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <CheckCircle2 size={12} className="text-[#86EFAC]" />
+                                  <span>
+                                    {p.yaPagadoUsd > 0
+                                      ? `Pagar Saldo (${formatUSD(p.pendienteUsd)})`
+                                      : `Pagar Comisión (${formatUSD(p.pendienteUsd)})`}
+                                  </span>
+                                </>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleAbrirModalPago(p, true)}
+                              disabled={liquidandoPuestoId === p.id}
+                              className="px-2 py-1 rounded text-[11px] font-bold text-[#2C474E] bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 transition-colors cursor-pointer"
+                              title="Registrar monto diferente o adelanto"
+                            >
+                              + Adelanto
+                            </button>
+                          </div>
+                        ) : p.id !== 'sin-puesto' ? (
                           <button
                             type="button"
-                            onClick={() => handleAbrirModalPago(p)}
+                            onClick={() => handleAbrirModalPago(p, true)}
                             disabled={liquidandoPuestoId === p.id}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#166534] hover:bg-[#14532d] active:bg-[#0f3d21] text-white shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+                            className="px-2 py-1 rounded text-[11px] font-bold text-[#2C474E] bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 transition-colors cursor-pointer"
+                            title="Registrar adelanto de comisión"
                           >
-                            {liquidandoPuestoId === p.id ? (
-                              <>
-                                <Loader2 size={12} className="animate-spin text-white" />
-                                <span>Pagando...</span>
-                              </>
-                            ) : (
-                              <>
-                                <CheckCircle2 size={12} className="text-[#86EFAC]" />
-                                <span>
-                                  {p.yaPagadoUsd > 0
-                                    ? `Pagar Saldo (${formatUSD(p.pendienteUsd)})`
-                                    : `Pagar Comisión (${formatUSD(p.pendienteUsd)})`}
-                                </span>
-                              </>
-                            )}
+                            + Adelanto
                           </button>
                         ) : (
                           <span className="text-zinc-400 text-xs italic">-</span>
@@ -1296,7 +1340,7 @@ export const BalanceView: React.FC<Props> = ({
                 </div>
                 <div>
                   <h3 className="text-sm font-bold leading-tight">
-                    {pagoModalData.yaPagadoUSD > 0 ? 'Pagar Saldo de Comisión' : 'Pagar Comisión Semanal'}
+                    {pagoModalData.yaPagadoUSD > 0 ? 'Pagar Saldo / Adelanto de Comisión' : 'Pagar Comisión Semanal'}
                   </h3>
                   <p className="text-[11px] text-zinc-300">
                     {pagoModalData.puestoNombre} • {rangoTexto} (Lun - Sáb)
@@ -1314,27 +1358,57 @@ export const BalanceView: React.FC<Props> = ({
 
             {/* Contenido */}
             <div className="p-4 sm:p-5 space-y-4">
-              {/* Cifra acumulada o saldo a liquidar en USD */}
+              {/* Cifra acumulada o saldo de referencia en USD */}
               <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl flex items-center justify-between">
                 <div>
                   <span className="text-[11px] font-semibold text-zinc-500 block">
-                    {pagoModalData.yaPagadoUSD > 0
-                      ? 'Saldo Pendiente a Liquidar:'
-                      : `Comisión a Liquidar (${pagoModalData.comisionPorcentaje}%):`}
+                    Comisión Generada ({pagoModalData.comisionPorcentaje}%):
                   </span>
-                  {pagoModalData.yaPagadoUSD > 0 ? (
-                    <span className="text-[10px] text-zinc-500 block">
-                      Total: {formatUSD(pagoModalData.comisionTotalUSD)} • Ya pagado: {formatUSD(pagoModalData.yaPagadoUSD)}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] text-zinc-400">
-                      Congelada según tasa de cada día trabajado
-                    </span>
+                  <span className="text-[10px] text-zinc-500 block">
+                    Total: {formatUSD(pagoModalData.comisionTotalUSD)} • Ya pagado: {formatUSD(pagoModalData.yaPagadoUSD)}
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-zinc-400 uppercase font-semibold block">Saldo Pendiente</span>
+                  <div className="text-lg sm:text-xl font-black font-mono text-[#047857] tabular-nums">
+                    {formatUSD(pagoModalData.comisionUSD)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Monto editable a liquidar en USD */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-[#18181B]">
+                    Monto a transferir en Dólares ($ USD):
+                  </label>
+                  {pagoModalData.comisionUSD > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setMontoUSDInput(String(pagoModalData.comisionUSD))}
+                      className="text-[11px] text-[#047857] hover:underline font-semibold cursor-pointer"
+                    >
+                      Sugerido: {formatUSD(pagoModalData.comisionUSD)}
+                    </button>
                   )}
                 </div>
-                <div className="text-xl sm:text-2xl font-black font-mono text-[#047857] tabular-nums">
-                  {formatUSD(pagoModalData.comisionUSD)}
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="any"
+                    value={montoUSDInput}
+                    onChange={(e) => setMontoUSDInput(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full p-2.5 text-sm font-mono font-bold border border-zinc-300 rounded-lg bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none"
+                    autoFocus
+                  />
+                  <span className="absolute right-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
+                    USD
+                  </span>
                 </div>
+                <span className="text-[10px] text-zinc-400 mt-0.5 block">
+                  Podés liquidar el saldo exacto, un pago parcial o un monto anticipado/adelanto.
+                </span>
               </div>
 
               {/* Tasa BCV del día de pago */}
@@ -1396,17 +1470,17 @@ export const BalanceView: React.FC<Props> = ({
               {/* Monto exacto a transferir en Bolívares */}
               <div className="p-3.5 bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl text-center">
                 <span className="text-xs font-bold text-[#065F46] block uppercase tracking-wider mb-0.5">
-                  Monto exacto a transferir:
+                  Monto exacto a transferir en Bolívares:
                 </span>
                 <div className="text-2xl sm:text-3xl font-black font-mono text-[#166534] tabular-nums">
                   {formatVES(
                     Math.round(
-                      pagoModalData.comisionUSD * (parseFloat(tasaPagoComision) || tasaActual || 100) * 100
+                      ((parseFloat(montoUSDInput) || 0) * (parseFloat(tasaPagoComision) || tasaActual || 100)) * 100
                     ) / 100
                   )}
                 </div>
                 <span className="text-[10px] text-[#059669] font-medium block mt-0.5">
-                  ({formatUSD(pagoModalData.comisionUSD)} × {formatNumber(parseFloat(tasaPagoComision) || tasaActual || 100)} Bs/$)
+                  ({formatUSD(parseFloat(montoUSDInput) || 0)} × {formatNumber(parseFloat(tasaPagoComision) || tasaActual || 100)} Bs/$)
                 </span>
               </div>
             </div>
