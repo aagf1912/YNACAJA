@@ -33,13 +33,17 @@ import {
 import { toPng } from 'html-to-image';
 import { Share } from '@capacitor/share';
 import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Movimiento, Puesto, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento, LiquidacionSemanal } from '../types';
+import { Movimiento, Puesto, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento, LiquidacionSemanal, SaldosInicialesCaja, TransferenciaCaja } from '../types';
 import { calcularMontos, formatNumber, formatPorcentaje, formatUSD, formatVES } from '../utils/format';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
 import { getSemanaLunesSabado, shiftSemana } from '../utils/dateUtils';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { getLiquidacionesSemanales, registrarLiquidacionSemanal, insertMovimientos } from '../services/supabase';
 import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
+import { CajaDisponibleCard } from '../components/CajaDisponibleCard';
+import { ModalSaldoInicial } from '../components/ModalSaldoInicial';
+import { ModalTransferenciaCaja } from '../components/ModalTransferenciaCaja';
+import { ResumenMensualView } from '../components/ResumenMensualView';
 
 interface Props {
   movimientos: Movimiento[];
@@ -59,6 +63,167 @@ export const BalanceView: React.FC<Props> = ({
   const reportRef = useRef<HTMLDivElement>(null);
   const [compartiendo, setCompartiendo] = useState(false);
   const [filtroPuesto, setFiltroPuesto] = useState<string>('todos');
+
+  // Modo de período: 'semanal' o 'mensual'
+  const [periodo, setPeriodo] = useState<'semanal' | 'mensual'>('semanal');
+  const [fechaMes, setFechaMes] = useState<Date>(() => new Date());
+
+  // Estado de Caja Disponible en tiempo real
+  const [movimientosHistoricos, setMovimientosHistoricos] = useState<Movimiento[]>(movimientos);
+  const [saldosIniciales, setSaldosIniciales] = useState<SaldosInicialesCaja>({
+    digital_bs: 0,
+    efectivo_bs: 0,
+    divisas_usd: 0,
+  });
+  const [transferencias, setTransferencias] = useState<TransferenciaCaja[]>([]);
+  const [cargandoCaja, setCargandoCaja] = useState<boolean>(false);
+
+  // Modales de caja
+  const [modalSaldoInicialAbierto, setModalSaldoInicialAbierto] = useState(false);
+  const [modalTransferenciaAbierto, setModalTransferenciaAbierto] = useState(false);
+
+  // Carga global de datos vía fetch directo (movimientos, saldos_iniciales_caja y transferencias_caja)
+  const cargarDatosCajaYMovimientos = useCallback(async () => {
+    setCargandoCaja(true);
+    try {
+      const token = getAccessTokenFromStorage() || supabaseAnonKey;
+      const headers = {
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${token}`,
+      };
+
+      // 1. Cargar todos los movimientos históricos
+      try {
+        const resMovs = await fetch(
+          `${supabaseUrl}/rest/v1/movimientos?select=*&order=fecha.desc,created_at.desc`,
+          { headers }
+        );
+        if (resMovs.ok) {
+          const dataMovs = await resMovs.json();
+          if (Array.isArray(dataMovs)) {
+            setMovimientosHistoricos(dataMovs);
+          }
+        }
+      } catch (e) {
+        console.warn('Error al cargar movimientos históricos:', e);
+      }
+
+      // 2. Cargar saldos iniciales de caja
+      try {
+        const resSaldos = await fetch(
+          `${supabaseUrl}/rest/v1/saldos_iniciales_caja?id=eq.1&select=*`,
+          { headers }
+        );
+        if (resSaldos.ok) {
+          const dataSaldos = await resSaldos.json();
+          if (Array.isArray(dataSaldos) && dataSaldos.length > 0) {
+            setSaldosIniciales({
+              id: dataSaldos[0].id,
+              digital_bs: Number(dataSaldos[0].digital_bs) || 0,
+              efectivo_bs: Number(dataSaldos[0].efectivo_bs) || 0,
+              divisas_usd: Number(dataSaldos[0].divisas_usd) || 0,
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('Error al cargar saldos iniciales:', e);
+      }
+
+      // 3. Cargar transferencias de caja
+      try {
+        const resTrans = await fetch(
+          `${supabaseUrl}/rest/v1/transferencias_caja?select=*&order=fecha.desc,created_at.desc`,
+          { headers }
+        );
+        if (resTrans.ok) {
+          const dataTrans = await resTrans.json();
+          if (Array.isArray(dataTrans)) {
+            setTransferencias(dataTrans);
+          }
+        }
+      } catch (e) {
+        console.warn('Error al cargar transferencias de caja:', e);
+      }
+    } finally {
+      setCargandoCaja(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    cargarDatosCajaYMovimientos();
+  }, [cargarDatosCajaYMovimientos]);
+
+  // Si los movimientos pasados por prop se actualizan (por ejemplo desde App.tsx), sincronizar
+  useEffect(() => {
+    if (movimientos && movimientos.length > 0) {
+      setMovimientosHistoricos((prev) => (prev.length === 0 ? movimientos : prev));
+    }
+  }, [movimientos]);
+
+  // Cálculo en tiempo real de la Caja Disponible en cada bolsillo
+  const cajaDisponible = useMemo(() => {
+    let digitalBs = saldosIniciales.digital_bs || 0;
+    let efectivoBs = saldosIniciales.efectivo_bs || 0;
+    let divisasUsd = saldosIniciales.divisas_usd || 0;
+
+    const baseMovs = movimientosHistoricos.length > 0 ? movimientosHistoricos : movimientos;
+
+    for (const m of baseMovs) {
+      const esVenta = m.tipo === 'venta' || m.tipo === 'ingreso';
+      const esGasto = m.tipo === 'gasto' || m.tipo === 'egreso';
+      if (!esVenta && !esGasto) continue;
+
+      const montoOrig = Number(m.monto_original) || 0;
+      const montoBs =
+        Number(m.monto_bs) ||
+        (m.moneda_original === 'VES' ? montoOrig : montoOrig * (Number(m.tasa) || tasaActual));
+      const montoUsd =
+        Number(m.monto_usd) ||
+        (m.moneda_original === 'USD'
+          ? montoOrig
+          : tasaActual > 0
+          ? montoOrig / tasaActual
+          : 0);
+
+      if (m.metodo_pago === 'pago_movil' || m.metodo_pago === 'punto_venta') {
+        if (esVenta) digitalBs += montoBs;
+        if (esGasto) digitalBs -= montoBs;
+      } else if (m.metodo_pago === 'efectivo_bs') {
+        if (esVenta) efectivoBs += montoBs;
+        if (esGasto) efectivoBs -= montoBs;
+      } else if (m.metodo_pago === 'divisa') {
+        if (esVenta) divisasUsd += montoUsd;
+        if (esGasto) divisasUsd -= montoUsd;
+      }
+    }
+
+    for (const t of transferencias) {
+      const montoDestino = Number(t.monto_destino ?? t.monto_recibido ?? t.monto ?? 0);
+      const montoOrigen = Number(t.monto_origen ?? t.monto_salida ?? t.monto ?? 0);
+
+      // Sumar al destino
+      if (t.destino === 'digital_bs') digitalBs += montoDestino;
+      else if (t.destino === 'efectivo_bs') efectivoBs += montoDestino;
+      else if (t.destino === 'divisas_usd') divisasUsd += montoDestino;
+
+      // Restar del origen
+      if (t.origen === 'digital_bs') digitalBs -= montoOrigen;
+      else if (t.origen === 'efectivo_bs') efectivoBs -= montoOrigen;
+      else if (t.origen === 'divisas_usd') divisasUsd -= montoOrigen;
+    }
+
+    const tasaBcvOficial = tasaActual > 0 ? tasaActual : 100;
+    const totalConsolidadoUsd = divisasUsd + (digitalBs + efectivoBs) / tasaBcvOficial;
+    const totalConsolidadoBs = divisasUsd * tasaBcvOficial + digitalBs + efectivoBs;
+
+    return {
+      digitalBs,
+      efectivoBs,
+      divisasUsd,
+      totalConsolidadoUsd,
+      totalConsolidadoBs,
+    };
+  }, [saldosIniciales, movimientosHistoricos, movimientos, transferencias, tasaActual]);
 
   // Fecha base para la semana (por defecto hoy)
   const [fechaSemana, setFechaSemana] = useState<Date>(() => new Date());
@@ -103,10 +268,11 @@ export const BalanceView: React.FC<Props> = ({
 
   // Todos los movimientos dentro de la semana (Lunes a Sábado)
   const movimientosSemana = useMemo(() => {
-    return movimientos.filter(
+    const base = movimientosHistoricos.length > 0 ? movimientosHistoricos : movimientos;
+    return base.filter(
       (m) => m.fecha >= infoSemana.semanaInicio && m.fecha <= infoSemana.semanaFin
     );
-  }, [movimientos, infoSemana.semanaInicio, infoSemana.semanaFin]);
+  }, [movimientosHistoricos, movimientos, infoSemana.semanaInicio, infoSemana.semanaFin]);
 
   // Estado para el modal de pago de comisiones
   interface ModalPagarComisionData {
@@ -659,9 +825,150 @@ export const BalanceView: React.FC<Props> = ({
     }
   };
 
+  // Exportar reporte mensual y resumen anual en CSV
+  const exportarCSVMensual = () => {
+    const MESES = [
+      'Enero',
+      'Febrero',
+      'Marzo',
+      'Abril',
+      'Mayo',
+      'Junio',
+      'Julio',
+      'Agosto',
+      'Septiembre',
+      'Octubre',
+      'Noviembre',
+      'Diciembre',
+    ];
+    const mesIdx = fechaMes.getMonth();
+    const anoSel = fechaMes.getFullYear();
+    const mesNom = MESES[mesIdx];
+    const mesTxt = `${mesNom} ${anoSel}`;
+
+    const prefijo = `${anoSel}-${String(mesIdx + 1).padStart(2, '0')}`;
+    const base = movimientosHistoricos.length > 0 ? movimientosHistoricos : movimientos;
+    const movsMes = base.filter((m) => m.fecha && m.fecha.startsWith(prefijo));
+    const movsFiltrados =
+      filtroPuesto === 'todos' ? movsMes : movsMes.filter((m) => m.puesto_id === filtroPuesto);
+
+    let ingUSD = 0,
+      ingBs = 0,
+      gasUSD = 0,
+      gasBs = 0,
+      retUSD = 0,
+      retBs = 0;
+    for (const m of movsFiltrados) {
+      const { monto_usd, monto_bs } = calcularMontos(m);
+      if (m.tipo === 'venta' || m.tipo === 'ingreso') {
+        ingUSD += monto_usd;
+        ingBs += monto_bs;
+      } else {
+        if (m.naturaleza === 'Personal') {
+          retUSD += monto_usd;
+          retBs += monto_bs;
+        } else {
+          gasUSD += monto_usd;
+          gasBs += monto_bs;
+        }
+      }
+    }
+
+    let csv = `\uFEFF`;
+    csv += `"REPORTE MENSUAL Y RESUMEN ANUAL — CHICHA ADICTIVA"\n`;
+    csv += `"Mes Seleccionado:","${mesTxt}"\n`;
+    csv += `"Puesto de Venta:","${nombreFiltroPuesto}"\n`;
+    csv += `"Tasa Oficial BCV:","${tasaActual} Bs/$"\n\n`;
+
+    csv += `"RESUMEN DEL MES (${mesTxt})"\n`;
+    csv += `"Concepto","Monto ($ USD)","Monto (Bs)"\n`;
+    csv += `"Total Ingresos","${ingUSD.toFixed(2)}","${ingBs.toFixed(2)}"\n`;
+    csv += `"Gastos Operativos (Negocio)","${gasUSD.toFixed(2)}","${gasBs.toFixed(2)}"\n`;
+    csv += `"Retiros Personales","${retUSD.toFixed(2)}","${retBs.toFixed(2)}"\n`;
+    csv += `"Ganancia Neta","${(ingUSD - gasUSD - retUSD).toFixed(2)}","${(ingBs - gasBs - retBs).toFixed(2)}"\n\n`;
+
+    csv += `"RESUMEN ANUAL (${anoSel}) — ENERO A DICIEMBRE"\n`;
+    csv += `"Mes","Ingresos ($)","Gastos Operativos ($)","Retiros Personales ($)","Balance Neto ($)"\n`;
+
+    let totIng = 0,
+      totGas = 0,
+      totRet = 0;
+    const filteredBase =
+      filtroPuesto === 'todos' ? base : base.filter((m) => m.puesto_id === filtroPuesto);
+
+    for (let i = 0; i < 12; i++) {
+      const pref = `${anoSel}-${String(i + 1).padStart(2, '0')}`;
+      const mMes = filteredBase.filter((m) => m.fecha && m.fecha.startsWith(pref));
+      let mIng = 0,
+        mGas = 0,
+        mRet = 0;
+      for (const m of mMes) {
+        const { monto_usd } = calcularMontos(m);
+        if (m.tipo === 'venta' || m.tipo === 'ingreso') mIng += monto_usd;
+        else if (m.naturaleza === 'Personal') mRet += monto_usd;
+        else mGas += monto_usd;
+      }
+      totIng += mIng;
+      totGas += mGas;
+      totRet += mRet;
+      csv += `"${MESES[i]}","${mIng.toFixed(2)}","${mGas.toFixed(2)}","${mRet.toFixed(2)}","${(mIng - mGas - mRet).toFixed(2)}"\n`;
+    }
+    csv += `"TOTAL ANUAL ${anoSel}","${totIng.toFixed(2)}","${totGas.toFixed(2)}","${totRet.toFixed(2)}","${(totIng - totGas - totRet).toFixed(2)}"\n`;
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Balance_Mensual_${mesNom}_${anoSel}.csv`;
+    link.click();
+  };
+
   return (
     <div className="space-y-4 pb-24 pt-2 px-3 sm:px-4 max-w-4xl mx-auto">
-      {/* 1. SELECTOR DE FILTRO POR PUESTO */}
+      {/* 1. BLOQUE SUPERIOR FIJO: DINERO DISPONIBLE DE LA EMPRESA */}
+      <CajaDisponibleCard
+        digitalBs={cajaDisponible.digitalBs}
+        efectivoBs={cajaDisponible.efectivoBs}
+        divisasUsd={cajaDisponible.divisasUsd}
+        totalConsolidadoUsd={cajaDisponible.totalConsolidadoUsd}
+        totalConsolidadoBs={cajaDisponible.totalConsolidadoBs}
+        tasaBcv={tasaActual}
+        cargando={cargandoCaja}
+        onAbrirSaldoInicial={() => setModalSaldoInicialAbierto(true)}
+        onAbrirTransferencia={() => setModalTransferenciaAbierto(true)}
+      />
+
+      {/* 2. SELECTOR SEGMENTADO: VISTA SEMANAL | VISTA MENSUAL */}
+      <div className="flex items-center justify-center p-1 bg-zinc-200/70 rounded-xl border border-zinc-200 shadow-2xs">
+        <button
+          type="button"
+          onClick={() => setPeriodo('semanal')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+            periodo === 'semanal'
+              ? 'bg-white text-[#2C474E] shadow-xs'
+              : 'text-zinc-600 hover:text-zinc-900'
+          }`}
+        >
+          <Calendar size={15} />
+          <span>Vista Semanal</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setPeriodo('mensual')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+            periodo === 'mensual'
+              ? 'bg-white text-[#2C474E] shadow-xs'
+              : 'text-zinc-600 hover:text-zinc-900'
+          }`}
+        >
+          <BarChart2 size={15} />
+          <span>Vista Mensual / Anual</span>
+        </button>
+      </div>
+
+      {periodo === 'semanal' ? (
+        <>
+          {/* 1. SELECTOR DE FILTRO POR PUESTO */}
       {puestos.length > 0 && (
         <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
           <span className="text-[11px] font-bold text-[#52525B] flex items-center gap-1 shrink-0">
@@ -1327,6 +1634,61 @@ export const BalanceView: React.FC<Props> = ({
           </div>
         </div>
       </div>
+        </>
+      ) : (
+        <>
+          {/* BOTONES DE ACCIÓN: EXPORTAR EXCEL Y COMPARTIR IMAGEN */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={exportarCSVMensual}
+              className="flex-1 min-h-[44px] px-3 py-2 text-xs font-bold border border-[#E4E4E7] bg-white text-[#18181B] rounded-lg hover:bg-zinc-50 active:bg-zinc-100 flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
+            >
+              <Download size={15} className="text-[#52525B]" />
+              <span>Exportar Excel (CSV)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={compartirImagen}
+              disabled={compartiendo}
+              className="flex-1 min-h-[44px] px-3 py-2 text-xs font-bold bg-[#2C474E] text-white rounded-lg hover:bg-[#23393e] active:bg-[#1a2b2f] flex items-center justify-center gap-1.5 shadow-xs disabled:opacity-70 cursor-pointer"
+            >
+              <Share2 size={15} className="text-[#86EFAC]" />
+              <span>{compartiendo ? 'Generando...' : 'Compartir Imagen'}</span>
+            </button>
+          </div>
+
+          {/* CONTENEDOR REPORTE MENSUAL ref={reportRef} */}
+          <div ref={reportRef} className="space-y-4 bg-[#F4F4F5] p-1 rounded-md">
+            <ResumenMensualView
+              fechaMes={fechaMes}
+              onMesChange={setFechaMes}
+              movimientos={movimientosHistoricos.length > 0 ? movimientosHistoricos : movimientos}
+              filtroPuesto={filtroPuesto}
+              onFiltroPuestoChange={setFiltroPuesto}
+              puestos={puestos}
+              tasaActual={tasaActual}
+            />
+          </div>
+        </>
+      )}
+
+      {/* MODALES DE CAJA */}
+      <ModalSaldoInicial
+        isOpen={modalSaldoInicialAbierto}
+        onClose={() => setModalSaldoInicialAbierto(false)}
+        saldosActuales={saldosIniciales}
+        onGuardadoExitoso={cargarDatosCajaYMovimientos}
+      />
+
+      <ModalTransferenciaCaja
+        isOpen={modalTransferenciaAbierto}
+        onClose={() => setModalTransferenciaAbierto(false)}
+        tasaBcv={tasaActual}
+        transferencias={transferencias}
+        onActualizarDatos={cargarDatosCajaYMovimientos}
+      />
 
       {/* MODAL DE CONFIRMACIÓN: PAGO DE COMISIONES EN BOLÍVARES AL CAMBIO DEL DÍA */}
       {pagoModalData && (

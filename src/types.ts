@@ -115,3 +115,38 @@ export const METODOS_PAGO_LABELS: Record<MetodoPago, string> = {
   efectivo_bs: 'Efectivo Bs',
   divisa: 'Divisa ($)',
 };
+
+export type BolsilloCaja = 'digital_bs' | 'efectivo_bs' | 'divisas_usd';
+
+export const BOLSILLOS_LABELS: Record<BolsilloCaja, string> = {
+  digital_bs: 'Digital / Banco (Bs)',
+  efectivo_bs: 'Efectivo (Bs)',
+  divisas_usd: 'Divisas ($ USD)',
+};
+
+export interface SaldosInicialesCaja {
+  id?: number;
+  digital_bs: number;
+  efectivo_bs: number;
+  divisas_usd: number;
+  fecha_inicio?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TransferenciaCaja {
+  id: string;
+  fecha: string;
+  origen: BolsilloCaja;
+  destino: BolsilloCaja;
+  monto_origen?: number;
+  monto_destino?: number;
+  monto?: number;
+  monto_salida?: number;
+  monto_recibido?: number;
+  tasa?: number;
+  descripcion?: string;
+  concepto?: string;
+  creado_por?: string | null;
+  created_at?: string;
+}
