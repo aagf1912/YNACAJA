@@ -16,6 +16,7 @@ import {
   CircleDollarSign,
   Receipt,
   Sparkles,
+  Lock,
 } from 'lucide-react';
 import { Movimiento, PerfilUsuario, LiquidacionSemanal } from '../types';
 import { formatNumber, formatUSD, formatVES } from '../utils/format';
@@ -144,6 +145,10 @@ export const VendedorView: React.FC<Props> = ({
   const [toastMensaje, setToastMensaje] = useState<string | null>(null);
   const [mensajeExito, setMensajeExito] = useState<string | null>(null);
   const [mensajeError, setMensajeError] = useState<string | null>(null);
+
+  // Bloqueo de "Ayer" si ya tiene datos cargados
+  const esAyer = fechaSeleccionada === fechaAyerVzla;
+  const ayerBloqueado = esAyer && tieneCierreGuardado;
 
   // Liquidaciones semanales
   const [liquidaciones, setLiquidaciones] = useState<LiquidacionSemanal[]>([]);
@@ -319,7 +324,7 @@ export const VendedorView: React.FC<Props> = ({
 
   // Guardar Cierre del Día (Hoy o Ayer) con try/catch/finally garantizado y timeout
   const handleGuardarCierre = async () => {
-    if (guardando) return;
+    if (guardando || ayerBloqueado) return;
 
     if (!perfil.puesto_id) {
       setMensajeError('No tienes un puesto de venta asignado a tu cuenta.');
@@ -659,7 +664,7 @@ export const VendedorView: React.FC<Props> = ({
                     inputMode="decimal"
                     value={montoEfectivoBs}
                     onChange={(e) => setMontoEfectivoBs(e.target.value)}
-                    disabled={guardando}
+                    disabled={ayerBloqueado || guardando}
                     placeholder="0.00"
                     className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
                   />
@@ -685,7 +690,7 @@ export const VendedorView: React.FC<Props> = ({
                     inputMode="decimal"
                     value={montoPagoMovilBs}
                     onChange={(e) => setMontoPagoMovilBs(e.target.value)}
-                    disabled={guardando}
+                    disabled={ayerBloqueado || guardando}
                     placeholder="0.00"
                     className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
                   />
@@ -711,7 +716,7 @@ export const VendedorView: React.FC<Props> = ({
                     inputMode="decimal"
                     value={montoPuntoVentaBs}
                     onChange={(e) => setMontoPuntoVentaBs(e.target.value)}
-                    disabled={guardando}
+                    disabled={ayerBloqueado || guardando}
                     placeholder="0.00"
                     className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
                   />
@@ -737,7 +742,7 @@ export const VendedorView: React.FC<Props> = ({
                     inputMode="decimal"
                     value={montoDivisasUSD}
                     onChange={(e) => setMontoDivisasUSD(e.target.value)}
-                    disabled={guardando}
+                    disabled={ayerBloqueado || guardando}
                     placeholder="0.00"
                     className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
                   />
@@ -796,37 +801,59 @@ export const VendedorView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* AVISO VERDE SI YA HAY CIERRE GUARDADO */}
-          {tieneCierreGuardado && (
-            <div className="p-3 bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl text-xs text-[#065F46] flex items-center gap-2">
-              <CheckCircle2 size={16} className="text-[#10B981] shrink-0" />
-              <span className="font-semibold">
-                ✓ Cierre guardado (podés modificar los montos si necesitás corregir algo)
+          {/* ESTADO DEL CIERRE: BLOQUEADO (AYER) O EDITABLE / GUARDABLE */}
+          {ayerBloqueado ? (
+            <div className="p-3.5 bg-zinc-100 border border-zinc-300 rounded-xl text-xs text-zinc-700 font-semibold flex items-center gap-2.5 shadow-xs">
+              <span className="text-base shrink-0">🔒</span>
+              <span>
+                Cierre de ayer ya registrado. Solo el administrador (Ynaides) puede modificar o eliminar cierres anteriores.
               </span>
             </div>
-          )}
+          ) : (
+            <>
+              {/* AVISO VERDE SI YA HAY CIERRE GUARDADO */}
+              {tieneCierreGuardado && (
+                <div className="p-3 bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl text-xs text-[#065F46] flex items-center gap-2">
+                  <CheckCircle2 size={16} className="text-[#10B981] shrink-0" />
+                  <span className="font-semibold">
+                    ✓ Cierre guardado (podés modificar los montos si necesitás corregir algo)
+                  </span>
+                </div>
+              )}
 
-          {/* BOTÓN GUARDAR / ACTUALIZAR CIERRE */}
-          <button
-            type="button"
-            onClick={handleGuardarCierre}
-            disabled={guardando}
-            className="w-full min-h-[48px] px-4 py-2.5 text-xs sm:text-sm font-bold bg-[#2C474E] text-white rounded-xl hover:bg-[#23393e] active:bg-[#1a2b2f] flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
-          >
-            {guardando ? (
-              <>
-                <Loader2 size={16} className="animate-spin text-white" />
-                <span>{tieneCierreGuardado ? 'Actualizando Cierre...' : 'Guardando Cierre...'}</span>
-              </>
-            ) : (
-              <>
-                <CheckCircle2 size={17} className="text-[#86EFAC]" />
-                <span>
-                  {tieneCierreGuardado ? `Actualizar Cierre (${fechaSeleccionadaTexto})` : `Guardar Cierre (${fechaSeleccionadaTexto})`}
-                </span>
-              </>
-            )}
-          </button>
+              {/* BOTÓN GUARDAR / ACTUALIZAR CIERRE */}
+              <button
+                type="button"
+                onClick={handleGuardarCierre}
+                disabled={guardando}
+                className="w-full min-h-[48px] px-4 py-2.5 text-xs sm:text-sm font-bold bg-[#2C474E] text-white rounded-xl hover:bg-[#23393e] active:bg-[#1a2b2f] flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+              >
+                {guardando ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin text-white" />
+                    <span>
+                      {esAyer
+                        ? 'Guardando Cierre de Ayer...'
+                        : tieneCierreGuardado
+                        ? 'Actualizando Cierre del Día...'
+                        : 'Guardando Cierre del Día...'}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={17} className="text-[#86EFAC]" />
+                    <span>
+                      {esAyer
+                        ? 'Guardar Cierre de Ayer'
+                        : tieneCierreGuardado
+                        ? 'Actualizar Cierre del Día'
+                        : `Guardar Cierre del Día (${labelHoy})`}
+                    </span>
+                  </>
+                )}
+              </button>
+            </>
+          )}
 
           {mensajeError && (
             <div className="p-3 bg-[#FEF2F2] border border-[#FECACA] rounded-xl text-xs text-[#991B1B] flex items-start gap-2">
