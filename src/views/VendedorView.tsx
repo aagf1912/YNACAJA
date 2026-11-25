@@ -20,11 +20,11 @@ import {
   Sparkles,
   Lock,
 } from 'lucide-react';
-import { Movimiento, PerfilUsuario, LiquidacionSemanal } from '../types';
+import { Movimiento, PerfilUsuario } from '../types';
 import { formatNumber, formatUSD, formatVES } from '../utils/format';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { getSemanaLunesSabado, shiftSemana } from '../utils/dateUtils';
-import { getLiquidacionesSemanales, supabase } from '../services/supabase';
+import { supabase } from '../services/supabase';
 import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
 
 interface Props {
@@ -166,51 +166,16 @@ export const VendedorView: React.FC<Props> = ({
   const esAyer = fechaSeleccionada === fechaAyerVzla;
   const ayerBloqueado = esAyer && tieneCierreGuardado;
 
-  // Liquidaciones semanales
-  const [liquidaciones, setLiquidaciones] = useState<LiquidacionSemanal[]>([]);
-
   // Comisión del puesto (default 22%)
   const comisionPorcentaje = perfil.puesto?.porcentaje_comision ?? 22.0;
 
-  // Cargar liquidaciones semanales via fetch directo
-  const cargarLiquidaciones = useCallback(async () => {
-    if (!perfil.puesto_id) return;
-    try {
-      const token = getAccessTokenFromStorage() || supabaseAnonKey;
-      const res = await fetch(
-        `${supabaseUrl}/rest/v1/liquidaciones_semanales?puesto_id=eq.${perfil.puesto_id}&select=*`,
-        {
-          method: 'GET',
-          headers: {
-            apikey: supabaseAnonKey,
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setLiquidaciones(data);
-          return;
-        }
-      }
-      const data = await getLiquidacionesSemanales(perfil.puesto_id);
-      setLiquidaciones(data);
-    } catch (err) {
-      console.warn('Error cargando liquidaciones en VendedorView:', err);
-    }
-  }, [perfil.puesto_id]);
-
-  useEffect(() => {
-    cargarLiquidaciones();
-  }, [cargarLiquidaciones]);
-
-  // Movimientos de adelantos / pagos recibidos (Sueldos y Comisiones del puesto)
+  // Movimientos de adelantos / pagos recibidos (Sueldos y Comisiones del puesto desde public.movimientos)
   const [adelantosMovimientos, setAdelantosMovimientos] = useState<Movimiento[]>([]);
   const [desplegarAdelantos, setDesplegarAdelantos] = useState<boolean>(false);
   const [cargandoAdelantos, setCargandoAdelantos] = useState<boolean>(false);
 
-  // Cargar adelantos y pagos de comisiones del puesto para la semana activa vía fetch directo con AbortController (8s)
+  // Cargar adelantos y pagos de comisiones del puesto vía fetch directo con AbortController (8s)
+  // Única fuente de verdad: public.movimientos (tipo === 'gasto' && categoria === 'Sueldos / Comisiones')
   const cargarAdelantos = useCallback(async () => {
     if (!perfil.puesto_id) return;
     const controller = new AbortController();
@@ -219,10 +184,8 @@ export const VendedorView: React.FC<Props> = ({
     try {
       setCargandoAdelantos(true);
       const token = getAccessTokenFromStorage() || supabaseAnonKey;
-      const fInicio = infoSemanaHoy.semanaInicio;
-      const fFin = fechaDomingoSemanaHoy;
 
-      const url = `${supabaseUrl}/rest/v1/movimientos?puesto_id=eq.${perfil.puesto_id}&tipo=eq.gasto&fecha=gte.${fInicio}&fecha=lte.${fFin}&select=*&order=fecha.desc,created_at.desc`;
+      const url = `${supabaseUrl}/rest/v1/movimientos?puesto_id=eq.${perfil.puesto_id}&tipo=eq.gasto&select=*&order=fecha.desc,created_at.desc`;
 
       const res = await fetch(url, {
         method: 'GET',
@@ -245,41 +208,46 @@ export const VendedorView: React.FC<Props> = ({
               (item.categoria === 'Sueldos / Comisiones' || item.categoria === 'Nómina / Sueldos')
           );
           setAdelantosMovimientos(filtrados);
+          return;
         }
       }
+
+      // Fallback a movimientos de props si la petición directa no devuelve un array
+      const filtradosProps = (movimientos || []).filter(
+        (item) =>
+          item.puesto_id === perfil.puesto_id &&
+          item.tipo === 'gasto' &&
+          (item.categoria === 'Sueldos / Comisiones' || item.categoria === 'Nómina / Sueldos')
+      );
+      setAdelantosMovimientos(filtradosProps);
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         console.warn('Error cargando adelantos del vendedor:', err);
       }
+      const filtradosProps = (movimientos || []).filter(
+        (item) =>
+          item.puesto_id === perfil.puesto_id &&
+          item.tipo === 'gasto' &&
+          (item.categoria === 'Sueldos / Comisiones' || item.categoria === 'Nómina / Sueldos')
+      );
+      setAdelantosMovimientos(filtradosProps);
     } finally {
       clearTimeout(timeoutId);
       setCargandoAdelantos(false);
     }
-  }, [perfil.puesto_id, infoSemanaHoy.semanaInicio, fechaDomingoSemanaHoy]);
+  }, [perfil.puesto_id, movimientos]);
 
   useEffect(() => {
     cargarAdelantos();
   }, [cargarAdelantos]);
 
-  // Suscripción en tiempo real a liquidaciones y movimientos del puesto
+  // Suscripción en tiempo real a movimientos del puesto
   useEffect(() => {
     const client = supabase;
     if (!client || !perfil.puesto_id) return;
 
     const channel = client
       .channel(`rt-vendedor-movimientos-${perfil.puesto_id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'liquidaciones_semanales',
-          filter: `puesto_id=eq.${perfil.puesto_id}`,
-        },
-        () => {
-          cargarLiquidaciones();
-        }
-      )
       .on(
         'postgres_changes',
         {
@@ -297,7 +265,7 @@ export const VendedorView: React.FC<Props> = ({
     return () => {
       client.removeChannel(channel);
     };
-  }, [perfil.puesto_id, cargarLiquidaciones, cargarAdelantos]);
+  }, [perfil.puesto_id, cargarAdelantos]);
 
   // Cargar en el formulario los registros del día seleccionado (Hoy o Ayer) mediante fetch directo
   const cargarCierre = useCallback(async (fechaACargar: string) => {
@@ -473,9 +441,8 @@ export const VendedorView: React.FC<Props> = ({
         setMensajeExito(null);
       }, 4000);
 
-      // Recargar los datos del cierre, estado de liquidaciones y adelantos
+      // Recargar los datos del cierre y adelantos
       await cargarCierre(fechaSeleccionada);
-      await cargarLiquidaciones();
       await cargarAdelantos();
     } catch (err: any) {
       console.error('Error al guardar cierre de caja:', err);
@@ -502,34 +469,57 @@ export const VendedorView: React.FC<Props> = ({
     return getSemanaLunesSabado(semanaGananciasBase);
   }, [semanaGananciasBase]);
 
-  // Todas las liquidaciones registradas para la semana seleccionada
-  const liquidacionesSemana = useMemo(() => {
-    if (!perfil.puesto_id) return [];
-    return liquidaciones.filter(
-      (l) =>
-        l.puesto_id === perfil.puesto_id &&
-        l.semana_inicio === infoSemanaGanancias.semanaInicio &&
-        l.pagado !== false
-    );
-  }, [liquidaciones, perfil.puesto_id, infoSemanaGanancias.semanaInicio]);
+  const fechaDomingoSemanaGanancias = useMemo(() => {
+    const [y, m, d] = infoSemanaGanancias.semanaInicio.split('-').map(Number);
+    const dtDom = new Date(y, m - 1, d + 6, 12, 0, 0);
+    const yD = dtDom.getFullYear();
+    const mD = String(dtDom.getMonth() + 1).padStart(2, '0');
+    const dD = String(dtDom.getDate()).padStart(2, '0');
+    return `${yD}-${mD}-${dD}`;
+  }, [infoSemanaGanancias.semanaInicio]);
 
-  // Sumatoria de montos pagados en USD y en Bs en la semana seleccionada
+  // Movimientos de pagos y adelantos de comisiones para la semana seleccionada en Mis Ganancias
+  // Única fuente de verdad: public.movimientos
+  const adelantosSemanaGanancias = useMemo(() => {
+    return adelantosMovimientos.filter(
+      (m) => m.fecha >= infoSemanaGanancias.semanaInicio && m.fecha <= fechaDomingoSemanaGanancias
+    );
+  }, [adelantosMovimientos, infoSemanaGanancias.semanaInicio, fechaDomingoSemanaGanancias]);
+
+  // Sumatoria de montos pagados en USD y en Bs en la semana seleccionada (consultando public.movimientos)
   const { yaPagadoSemanaUSD, yaPagadoSemanaBs, tasaCobroPromedio } = useMemo(() => {
-    let usd = 0;
-    let bs = 0;
-    for (const l of liquidacionesSemana) {
-      usd += Number(l.monto_comision_usd ?? l.monto_usd ?? 0);
-      bs += Number((l as any).monto_pagado_bs ?? l.monto_bs ?? 0);
+    let sumUSD = 0;
+    let sumBs = 0;
+    const tasaActual = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
+
+    for (const m of adelantosSemanaGanancias) {
+      const tasaM = Number(m.tasa_aplicada ?? m.tasa ?? tasaActual) || 1;
+      const orig = Number(m.monto_original) || 0;
+      let mUSD = 0;
+      let mBs = 0;
+
+      if (m.moneda_original === 'USD' || m.moneda === 'USD') {
+        mUSD = orig;
+        mBs = orig * tasaM;
+      } else {
+        mBs = orig;
+        mUSD = tasaM > 0 ? orig / tasaM : 0;
+      }
+
+      sumUSD += mUSD;
+      sumBs += mBs;
     }
-    usd = Math.round(usd * 100) / 100;
-    bs = Math.round(bs * 100) / 100;
-    const tasa = usd > 0 && bs > 0 ? Math.round((bs / usd) * 100) / 100 : 0;
+
+    sumUSD = Math.round(sumUSD * 100) / 100;
+    sumBs = Math.round(sumBs * 100) / 100;
+    const tasaProm = sumUSD > 0 && sumBs > 0 ? Math.round((sumBs / sumUSD) * 100) / 100 : 0;
+
     return {
-      yaPagadoSemanaUSD: usd,
-      yaPagadoSemanaBs: bs,
-      tasaCobroPromedio: tasa,
+      yaPagadoSemanaUSD: sumUSD,
+      yaPagadoSemanaBs: sumBs,
+      tasaCobroPromedio: tasaProm,
     };
-  }, [liquidacionesSemana]);
+  }, [adelantosSemanaGanancias, tasaEfectiva, tasaDia]);
 
   const movimientosSemanaGanancias = useMemo(() => {
     return movimientos.filter((m) => {
@@ -652,13 +642,19 @@ export const VendedorView: React.FC<Props> = ({
     };
   }, [ventasSemanaActiva, tasaEfectiva, tasaDia, comisionPorcentaje]);
 
-  // 2. Adelantos / Pagos Recibidos en el período actual
+  // 2. Adelantos / Pagos Recibidos en el período actual (semana activa de Cierre de Caja)
+  const adelantosSemanaHoy = useMemo(() => {
+    return adelantosMovimientos.filter(
+      (m) => m.fecha >= infoSemanaHoy.semanaInicio && m.fecha <= fechaDomingoSemanaHoy
+    );
+  }, [adelantosMovimientos, infoSemanaHoy.semanaInicio, fechaDomingoSemanaHoy]);
+
   const { totalAdelantosUSD, totalAdelantosBs, adelantosOrdenados } = useMemo(() => {
     let sumUSD = 0;
     let sumBs = 0;
     const tasaActual = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
 
-    const items = adelantosMovimientos.map((m) => {
+    const items = adelantosSemanaHoy.map((m) => {
       const tasaM = Number(m.tasa_aplicada ?? m.tasa ?? tasaActual) || 1;
       const orig = Number(m.monto_original) || 0;
       let mUSD = 0;
@@ -688,7 +684,7 @@ export const VendedorView: React.FC<Props> = ({
       totalAdelantosBs: Math.round(sumBs * 100) / 100,
       adelantosOrdenados: items,
     };
-  }, [adelantosMovimientos, tasaEfectiva, tasaDia]);
+  }, [adelantosSemanaHoy, tasaEfectiva, tasaDia]);
 
   // 3. Saldo Pendiente por Cobrar: Comisión Generada - Adelantos Recibidos
   const saldoPendienteUSD = Math.round((comisionGeneradaUSD - totalAdelantosUSD) * 100) / 100;
@@ -1273,27 +1269,41 @@ export const VendedorView: React.FC<Props> = ({
             </div>
 
             {/* HISTORIAL DE ABONOS / PAGOS DE LA SEMANA */}
-            {liquidacionesSemana.length > 0 && (
+            {adelantosSemanaGanancias.length > 0 && (
               <div className="mt-3.5 pt-3 border-t border-white/10 space-y-1.5">
                 <span className="text-[10px] uppercase font-bold text-emerald-300/80 tracking-wider block">
                   Historial de Abonos / Pagos:
                 </span>
                 <div className="space-y-1">
-                  {liquidacionesSemana.map((l, idx) => {
-                    const fechaAbono = l.fecha_pago || (l as any).created_at?.slice(0, 10) || 'Fecha n/d';
-                    const mBs = Number((l as any).monto_pagado_bs ?? l.monto_bs ?? 0);
-                    const mUsd = Number(l.monto_comision_usd ?? l.monto_usd ?? 0);
-                    const t = Number((l as any).tasa_pago ?? l.tasa ?? 0);
+                  {adelantosSemanaGanancias.map((ad, idx) => {
+                    const tasaActual = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
+                    const tasaM = Number(ad.tasa_aplicada ?? ad.tasa ?? tasaActual) || 1;
+                    const orig = Number(ad.monto_original) || 0;
+                    let mUSD = 0;
+                    let mBs = 0;
+
+                    if (ad.moneda_original === 'USD' || ad.moneda === 'USD') {
+                      mUSD = orig;
+                      mBs = orig * tasaM;
+                    } else {
+                      mBs = orig;
+                      mUSD = tasaM > 0 ? orig / tasaM : 0;
+                    }
+
+                    const fechaTexto = formatFechaCorta(ad.fecha);
+                    const labelDesc = ad.descripcion ? ad.descripcion.replace(/ \([^)]*\)/g, '').trim() : 'Adelanto / Pago';
+                    const metodoLabel = getMetodoPagoLabel(ad.metodo_pago);
+
                     return (
                       <div
-                        key={l.id || `liq-${idx}`}
+                        key={ad.id || `adelanto-${idx}`}
                         className="text-[11px] bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-1 text-zinc-200"
                       >
                         <span className="font-semibold text-zinc-300">
-                          {fechaAbono}: <span className="text-white font-mono font-bold">{formatUSD(mUsd)}</span>
+                          {fechaTexto} · {labelDesc} <span className="text-zinc-400 font-normal">({metodoLabel})</span>: <span className="text-white font-mono font-bold">{formatUSD(mUSD)}</span>
                         </span>
                         <span className="text-[#86EFAC] font-mono font-bold">
-                          {formatVES(mBs)} {t > 0 && <span className="text-zinc-400 text-[10px] font-normal font-sans">(Tasa BCV: {formatNumber(t)} Bs/$)</span>}
+                          {formatVES(mBs)} {tasaM > 0 && <span className="text-zinc-400 text-[10px] font-normal font-sans">(Tasa BCV: {formatNumber(tasaM)} Bs/$)</span>}
                         </span>
                       </div>
                     );

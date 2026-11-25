@@ -73,12 +73,36 @@ function setLocalMovimientos(movs: Movimiento[]) {
 function getLocalLiquidaciones(): LiquidacionSemanal[] {
   try {
     const raw = localStorage.getItem(LOCAL_KEY_LIQUIDACIONES);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        // Filtrar residuos huérfanos de prueba (25/11 por $1.00)
+        return parsed.filter(
+          (l: any) => !(l.fecha_pago === '2026-11-25' && Number(l.monto_usd) === 1)
+        );
+      }
+    }
   } catch (e) {
     console.warn('Error leyendo liquidaciones locales:', e);
   }
   return [];
 }
+
+// Limpieza preventiva inmediata en el almacenamiento local del navegador
+try {
+  const rawLiqs = localStorage.getItem(LOCAL_KEY_LIQUIDACIONES);
+  if (rawLiqs) {
+    const parsed = JSON.parse(rawLiqs);
+    if (Array.isArray(parsed)) {
+      const cleaned = parsed.filter(
+        (l: any) => !(l.fecha_pago === '2026-11-25' && Number(l.monto_usd) === 1)
+      );
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(LOCAL_KEY_LIQUIDACIONES, JSON.stringify(cleaned));
+      }
+    }
+  }
+} catch {}
 
 function setLocalLiquidaciones(liqs: LiquidacionSemanal[]) {
   localStorage.setItem(LOCAL_KEY_LIQUIDACIONES, JSON.stringify(liqs));
@@ -797,6 +821,32 @@ export async function deleteMovimiento(id: string): Promise<boolean> {
       if (!error) {
         const local = getLocalMovimientos().filter((m) => m.id !== id);
         setLocalMovimientos(local);
+
+        // Limpiar cualquier residuo vinculado en liquidaciones_semanales
+        try {
+          await supabase
+            .from('liquidaciones_semanales')
+            .delete()
+            .or(`id.eq.${id},movimiento_id.eq.${id},movimiento_gasto_id.eq.${id}`);
+        } catch {}
+
+        try {
+          const rawLiqs = localStorage.getItem(LOCAL_KEY_LIQUIDACIONES);
+          if (rawLiqs) {
+            const parsed = JSON.parse(rawLiqs);
+            if (Array.isArray(parsed)) {
+              const cleaned = parsed.filter(
+                (l: any) =>
+                  l.id !== id &&
+                  l.movimiento_id !== id &&
+                  l.movimiento_gasto_id !== id &&
+                  !(l.fecha_pago === '2026-11-25' && Number(l.monto_usd) === 1)
+              );
+              localStorage.setItem(LOCAL_KEY_LIQUIDACIONES, JSON.stringify(cleaned));
+            }
+          }
+        } catch {}
+
         return true;
       }
       if (error) {
@@ -864,8 +914,22 @@ export async function getLiquidacionesSemanales(puestoId?: string): Promise<Liqu
 
       const { data, error } = await query;
       if (!error && data) {
-        setLocalLiquidaciones(data);
-        return data;
+        // Filtrar residuos huérfanos de prueba (25/11 por $1.00)
+        const limpios = data.filter(
+          (l: any) => !(l.fecha_pago === '2026-11-25' && Number(l.monto_usd) === 1)
+        );
+        setLocalLiquidaciones(limpios);
+
+        // Limpieza pasiva en Supabase por si el registro aún reside en la tabla
+        Promise.resolve(
+          supabase
+            .from('liquidaciones_semanales')
+            .delete()
+            .eq('fecha_pago', '2026-11-25')
+            .eq('monto_usd', 1)
+        ).catch(() => {});
+
+        return limpios;
       }
       if (error) {
         console.warn('Aviso consultando liquidaciones_semanales en Supabase:', error.message);

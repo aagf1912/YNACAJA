@@ -326,7 +326,10 @@ export const BalanceView: React.FC<Props> = ({
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          setLiquidaciones(data);
+          const limpios = data.filter(
+            (l: any) => !(l.fecha_pago === '2026-11-25' && Number(l.monto_usd) === 1)
+          );
+          setLiquidaciones(limpios);
           return;
         }
       }
@@ -552,16 +555,35 @@ export const BalanceView: React.FC<Props> = ({
       const comisionUSD = Math.round(((totalUSD * pct) / 100) * 100) / 100;
       const netoUSD = Math.round((totalUSD - comisionUSD) * 100) / 100;
 
-      // Sumar todas las liquidaciones (pagos totales o parciales) de esta semana para este puesto
-      const liqsPuesto = liquidaciones.filter(
-        (l) => l.puesto_id === p.id && l.semana_inicio === infoSemana.semanaInicio
+      // Pagos de comisión y adelantos registrados en movimientos de la semana (fuente unificada)
+      const pagosMovsPuesto = movimientosSemana.filter(
+        (m) =>
+          m.puesto_id === p.id &&
+          m.tipo === 'gasto' &&
+          (m.categoria === 'Sueldos / Comisiones' || m.categoria === 'Nómina / Sueldos')
       );
 
       let yaPagadoUsd = 0;
       let yaPagadoBs = 0;
-      for (const l of liqsPuesto) {
-        yaPagadoUsd += Number(l.monto_comision_usd ?? l.monto_usd ?? 0);
-        yaPagadoBs += Number((l as any).monto_pagado_bs ?? l.monto_bs ?? 0);
+      for (const m of pagosMovsPuesto) {
+        const { monto_usd, monto_bs } = calcularMontos(m);
+        yaPagadoUsd += monto_usd;
+        yaPagadoBs += monto_bs;
+      }
+
+      // Si no hay movimientos pero existen liquidaciones en la tabla auxiliar
+      // (excluyendo el registro huérfano de prueba del 25/11 por $1.00)
+      if (pagosMovsPuesto.length === 0) {
+        const liqsPuesto = liquidaciones.filter(
+          (l) =>
+            l.puesto_id === p.id &&
+            l.semana_inicio === infoSemana.semanaInicio &&
+            !(l.fecha_pago === '2026-11-25' && Number(l.monto_usd) === 1)
+        );
+        for (const l of liqsPuesto) {
+          yaPagadoUsd += Number(l.monto_comision_usd ?? l.monto_usd ?? 0);
+          yaPagadoBs += Number((l as any).monto_pagado_bs ?? l.monto_bs ?? 0);
+        }
       }
       yaPagadoUsd = Math.round(yaPagadoUsd * 100) / 100;
       yaPagadoBs = Math.round(yaPagadoBs * 100) / 100;
