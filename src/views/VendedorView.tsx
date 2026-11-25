@@ -171,7 +171,6 @@ export const VendedorView: React.FC<Props> = ({
 
   // Movimientos de adelantos / pagos recibidos (Sueldos y Comisiones del puesto desde public.movimientos)
   const [adelantosMovimientos, setAdelantosMovimientos] = useState<Movimiento[]>([]);
-  const [desplegarAdelantos, setDesplegarAdelantos] = useState<boolean>(false);
   const [cargandoAdelantos, setCargandoAdelantos] = useState<boolean>(false);
 
   // Cargar adelantos y pagos de comisiones del puesto vía fetch directo con AbortController (8s)
@@ -602,95 +601,6 @@ export const VendedorView: React.FC<Props> = ({
     return metodo;
   };
 
-  // Ventas de la semana activa para el puesto del vendedor
-  const ventasSemanaActiva = useMemo(() => {
-    return movimientos.filter((m) => {
-      const esPuesto = !perfil.puesto_id || m.puesto_id === perfil.puesto_id;
-      const esVenta = m.tipo === 'venta' || m.tipo === 'ingreso';
-      const enRango =
-        m.fecha >= infoSemanaHoy.semanaInicio && m.fecha <= fechaDomingoSemanaHoy;
-      return esPuesto && esVenta && enRango;
-    });
-  }, [movimientos, perfil.puesto_id, infoSemanaHoy.semanaInicio, fechaDomingoSemanaHoy]);
-
-  // 1. Comisión Generada (22%) del período actual (USD y Bs)
-  const { totalVentasSemanaUSD, totalVentasSemanaBs, comisionGeneradaUSD, comisionGeneradaBs } = useMemo(() => {
-    let vUSD = 0;
-    let vBs = 0;
-    const tasaActual = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
-
-    for (const m of ventasSemanaActiva) {
-      const tasaM = Number(m.tasa_aplicada ?? m.tasa ?? tasaActual) || 1;
-      const orig = Number(m.monto_original) || 0;
-      if (m.moneda_original === 'USD' || m.moneda === 'USD') {
-        vUSD += orig;
-        vBs += orig * tasaM;
-      } else {
-        vBs += orig;
-        vUSD += tasaM > 0 ? orig / tasaM : 0;
-      }
-    }
-
-    const comUSD = Math.round(((vUSD * comisionPorcentaje) / 100) * 100) / 100;
-    const comBs = Math.round((comUSD * tasaActual) * 100) / 100;
-
-    return {
-      totalVentasSemanaUSD: vUSD,
-      totalVentasSemanaBs: vBs,
-      comisionGeneradaUSD: comUSD,
-      comisionGeneradaBs: comBs,
-    };
-  }, [ventasSemanaActiva, tasaEfectiva, tasaDia, comisionPorcentaje]);
-
-  // 2. Adelantos / Pagos Recibidos en el período actual (semana activa de Cierre de Caja)
-  const adelantosSemanaHoy = useMemo(() => {
-    return adelantosMovimientos.filter(
-      (m) => m.fecha >= infoSemanaHoy.semanaInicio && m.fecha <= fechaDomingoSemanaHoy
-    );
-  }, [adelantosMovimientos, infoSemanaHoy.semanaInicio, fechaDomingoSemanaHoy]);
-
-  const { totalAdelantosUSD, totalAdelantosBs, adelantosOrdenados } = useMemo(() => {
-    let sumUSD = 0;
-    let sumBs = 0;
-    const tasaActual = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
-
-    const items = adelantosSemanaHoy.map((m) => {
-      const tasaM = Number(m.tasa_aplicada ?? m.tasa ?? tasaActual) || 1;
-      const orig = Number(m.monto_original) || 0;
-      let mUSD = 0;
-      let mBs = 0;
-
-      if (m.moneda_original === 'USD' || m.moneda === 'USD') {
-        mUSD = orig;
-        mBs = orig * tasaM;
-      } else {
-        mBs = orig;
-        mUSD = tasaM > 0 ? orig / tasaM : 0;
-      }
-
-      sumUSD += mUSD;
-      sumBs += mBs;
-
-      return {
-        ...m,
-        montoCalculadoUSD: mUSD,
-        montoCalculadoBs: mBs,
-        tasaUsada: tasaM,
-      };
-    });
-
-    return {
-      totalAdelantosUSD: Math.round(sumUSD * 100) / 100,
-      totalAdelantosBs: Math.round(sumBs * 100) / 100,
-      adelantosOrdenados: items,
-    };
-  }, [adelantosSemanaHoy, tasaEfectiva, tasaDia]);
-
-  // 3. Saldo Pendiente por Cobrar: Comisión Generada - Adelantos Recibidos
-  const saldoPendienteUSD = Math.round((comisionGeneradaUSD - totalAdelantosUSD) * 100) / 100;
-  const saldoPendienteBs = Math.round((comisionGeneradaBs - totalAdelantosBs) * 100) / 100;
-  const tieneSaldoAFavor = saldoPendienteUSD >= -0.005;
-
   // Saldo pendiente por cobrar en la semana
   const pendienteSemanaUSD = useMemo(() => {
     return Math.max(0, Number((comisionSemanaUSD - yaPagadoSemanaUSD).toFixed(2)));
@@ -984,151 +894,6 @@ export const VendedorView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* TARJETA RESUMEN: MI COMISIÓN Y ADELANTOS */}
-          <div className="bg-white border border-[#E4E4E7] rounded-xl p-4 sm:p-5 shadow-xs space-y-3.5">
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200/60 flex items-center justify-center text-emerald-700">
-                  <Receipt size={17} />
-                </div>
-                <div>
-                  <h2 className="text-xs sm:text-sm font-bold text-[#18181B] tracking-tight">
-                    Mi Comisión y Adelantos
-                  </h2>
-                  <span className="text-[11px] text-zinc-500 font-medium">
-                    Semana activa: {infoSemanaHoy.rangoTexto}
-                  </span>
-                </div>
-              </div>
-
-              <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200/70 font-mono">
-                {comisionPorcentaje}% Comisión
-              </span>
-            </div>
-
-            {/* 3 Bloques Principales */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {/* Bloque 1: Comisión Generada */}
-              <div className="bg-[#FAFAFA] border border-zinc-200/80 rounded-xl p-3">
-                <span className="text-[11px] font-semibold text-zinc-600 block mb-1">
-                  Comisión Generada ({comisionPorcentaje}%):
-                </span>
-                <div className="text-xl sm:text-2xl font-black tabular-nums text-[#1E3A3A] font-mono">
-                  {formatUSD(comisionGeneradaUSD)}
-                </div>
-                <div className="text-xs font-semibold text-zinc-500 tabular-nums mt-0.5 font-mono">
-                  ≈ {formatVES(comisionGeneradaBs)}
-                </div>
-                <span className="text-[10px] text-zinc-400 mt-1 block">
-                  Ventas período: {formatUSD(totalVentasSemanaUSD)}
-                </span>
-              </div>
-
-              {/* Bloque 2: Adelantos / Pagos Recibidos */}
-              <div className="bg-[#FAFAFA] border border-zinc-200/80 rounded-xl p-3 flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-semibold text-zinc-600 block mb-1">
-                      Adelantos Recibidos:
-                    </span>
-                    {adelantosOrdenados.length > 0 && (
-                      <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-zinc-200 text-zinc-700">
-                        {adelantosOrdenados.length}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xl sm:text-2xl font-black tabular-nums text-[#0D9488] font-mono">
-                    {formatUSD(totalAdelantosUSD)}
-                  </div>
-                  <div className="text-xs font-semibold text-zinc-500 tabular-nums mt-0.5 font-mono">
-                    ≈ {formatVES(totalAdelantosBs)}
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setDesplegarAdelantos((prev) => !prev)}
-                  className="mt-2 text-[11px] font-semibold text-[#0D9488] hover:text-[#0f766e] flex items-center gap-1 transition-colors cursor-pointer self-start"
-                >
-                  <span>{desplegarAdelantos ? 'Ocultar detalle' : 'Ver detalle'}</span>
-                  {desplegarAdelantos ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                </button>
-              </div>
-
-              {/* Bloque 3: Saldo Pendiente por Cobrar */}
-              <div
-                className={`rounded-xl p-3 border ${
-                  tieneSaldoAFavor
-                    ? 'bg-[#ECFDF5] border-[#A7F3D0] text-[#065F46]'
-                    : 'bg-[#FEF2F2] border-[#FECACA] text-[#991B1B]'
-                }`}
-              >
-                <span className="text-[11px] font-bold block mb-1">
-                  {tieneSaldoAFavor ? 'Saldo Pendiente por Cobrar:' : 'Adelanto Excedente:'}
-                </span>
-                <div className="text-xl sm:text-2xl font-black tabular-nums font-mono">
-                  {tieneSaldoAFavor ? formatUSD(saldoPendienteUSD) : `-${formatUSD(Math.abs(saldoPendienteUSD))}`}
-                </div>
-                <div className="text-xs font-semibold tabular-nums mt-0.5 font-mono opacity-90">
-                  ≈ {tieneSaldoAFavor ? formatVES(saldoPendienteBs) : `-${formatVES(Math.abs(saldoPendienteBs))}`}
-                </div>
-                <span className="text-[10px] mt-1 block font-medium opacity-80">
-                  {tieneSaldoAFavor ? '✓ Saldo a favor por cobrar' : '⚠ Excedente a descontar'}
-                </span>
-              </div>
-            </div>
-
-            {/* Detalle Desplegable de Adelantos y Pagos */}
-            {desplegarAdelantos && (
-              <div className="pt-2 border-t border-zinc-100 space-y-2">
-                <span className="text-[11px] font-bold text-zinc-700 block">
-                  Detalle de Adelantos y Pagos Recibidos:
-                </span>
-                {cargandoAdelantos ? (
-                  <div className="p-3 bg-zinc-50 rounded-lg text-center text-xs text-zinc-500 flex items-center justify-center gap-2">
-                    <Loader2 size={14} className="animate-spin text-zinc-400" />
-                    <span>Cargando adelantos...</span>
-                  </div>
-                ) : adelantosOrdenados.length === 0 ? (
-                  <div className="p-3 bg-zinc-50 rounded-lg text-center text-xs text-zinc-500">
-                    No tienes adelantos ni deducciones registradas en este período.
-                  </div>
-                ) : (
-                  <div className="divide-y divide-zinc-100 bg-zinc-50 rounded-xl border border-zinc-200/80 overflow-hidden">
-                    {adelantosOrdenados.map((ad, idx) => (
-                      <div
-                        key={ad.id || `adelanto-${idx}`}
-                        className="p-2.5 sm:p-3 flex items-center justify-between gap-2 hover:bg-zinc-100/60 transition-colors"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-xs font-bold text-[#18181B] truncate">
-                              {ad.descripcion || 'Adelanto'}
-                            </span>
-                            <span className="text-[10px] text-zinc-600 bg-white px-1.5 py-0.5 rounded border border-zinc-200 font-medium">
-                              {getMetodoPagoLabel(ad.metodo_pago)}
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-zinc-400 block mt-0.5">
-                            {formatFechaCorta(ad.fecha)}
-                          </span>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <div className="text-xs sm:text-sm font-bold font-mono text-[#0D9488] tabular-nums">
-                            {formatUSD(ad.montoCalculadoUSD)}
-                          </div>
-                          <div className="text-[10px] font-semibold text-zinc-500 tabular-nums font-mono">
-                            {formatVES(ad.montoCalculadoBs)}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
           {/* ESTADO DEL CIERRE: BLOQUEADO (AYER) O EDITABLE / GUARDABLE */}
           {ayerBloqueado ? (
             <div className="p-3.5 bg-zinc-100 border border-zinc-300 rounded-xl text-xs text-zinc-700 font-semibold flex items-center gap-2.5 shadow-xs">
@@ -1269,12 +1034,24 @@ export const VendedorView: React.FC<Props> = ({
             </div>
 
             {/* HISTORIAL DE ABONOS / PAGOS DE LA SEMANA */}
-            {adelantosSemanaGanancias.length > 0 && (
-              <div className="mt-3.5 pt-3 border-t border-white/10 space-y-1.5">
-                <span className="text-[10px] uppercase font-bold text-emerald-300/80 tracking-wider block">
+            <div className="mt-4 pt-3.5 border-t border-white/10 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold text-emerald-300/90 tracking-wider block">
                   Historial de Abonos / Pagos:
                 </span>
-                <div className="space-y-1">
+                {adelantosSemanaGanancias.length > 0 && (
+                  <span className="text-[10px] font-mono font-bold text-[#86EFAC] bg-white/10 px-2 py-0.5 rounded border border-white/10">
+                    {adelantosSemanaGanancias.length} {adelantosSemanaGanancias.length === 1 ? 'registro' : 'registros'}
+                  </span>
+                )}
+              </div>
+
+              {adelantosSemanaGanancias.length === 0 ? (
+                <div className="text-xs text-zinc-400 bg-white/5 border border-white/5 rounded-lg px-3 py-2.5 text-center font-medium italic">
+                  Sin adelantos ni pagos registrados esta semana
+                </div>
+              ) : (
+                <div className="space-y-1.5">
                   {adelantosSemanaGanancias.map((ad, idx) => {
                     const tasaActual = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
                     const tasaM = Number(ad.tasa_aplicada ?? ad.tasa ?? tasaActual) || 1;
@@ -1290,27 +1067,48 @@ export const VendedorView: React.FC<Props> = ({
                       mUSD = tasaM > 0 ? orig / tasaM : 0;
                     }
 
-                    const fechaTexto = formatFechaCorta(ad.fecha);
-                    const labelDesc = ad.descripcion ? ad.descripcion.replace(/ \([^)]*\)/g, '').trim() : 'Adelanto / Pago';
+                    const concepto = ad.descripcion?.trim() || 'Adelanto';
                     const metodoLabel = getMetodoPagoLabel(ad.metodo_pago);
+                    const fechaStr = ad.fecha || 'Fecha n/d';
 
                     return (
                       <div
                         key={ad.id || `adelanto-${idx}`}
-                        className="text-[11px] bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-1 text-zinc-200"
+                        className="bg-white/5 hover:bg-white/[0.08] border border-white/10 rounded-lg p-2.5 sm:p-3 flex items-center justify-between gap-3 transition-colors"
                       >
-                        <span className="font-semibold text-zinc-300">
-                          {fechaTexto} · {labelDesc} <span className="text-zinc-400 font-normal">({metodoLabel})</span>: <span className="text-white font-mono font-bold">{formatUSD(mUSD)}</span>
-                        </span>
-                        <span className="text-[#86EFAC] font-mono font-bold">
-                          {formatVES(mBs)} {tasaM > 0 && <span className="text-zinc-400 text-[10px] font-normal font-sans">(Tasa BCV: {formatNumber(tasaM)} Bs/$)</span>}
-                        </span>
+                        <div className="min-w-0 flex-1">
+                          {/* Descripción / Concepto */}
+                          <div className="text-xs sm:text-sm font-bold text-white truncate">
+                            {concepto}
+                          </div>
+                          {/* Fecha y Método de pago */}
+                          <div className="text-[11px] text-zinc-300 font-medium mt-0.5 flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono text-zinc-200">{fechaStr}</span>
+                            <span className="text-zinc-500">·</span>
+                            <span className="text-emerald-300 font-medium">{metodoLabel}</span>
+                          </div>
+                        </div>
+
+                        {/* Monto exacto en USD ($) y Bolívares (Bs) con su tasa BCV */}
+                        <div className="text-right shrink-0">
+                          <div className="text-xs sm:text-sm font-bold font-mono text-white tabular-nums">
+                            {formatUSD(mUSD)}
+                          </div>
+                          <div className="text-[11px] font-semibold text-[#86EFAC] font-mono tabular-nums mt-0.5">
+                            {formatVES(mBs)}
+                          </div>
+                          {tasaM > 0 && (
+                            <div className="text-[10px] text-zinc-400 font-sans tabular-nums mt-0.5">
+                              Tasa BCV: {formatNumber(tasaM)} Bs/$
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           {/* SELECTOR DE SEMANAS DE LUNES A SÁBADO */}
