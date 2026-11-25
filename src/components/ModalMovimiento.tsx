@@ -25,7 +25,7 @@ import {
   Puesto,
   TipoMovimiento,
 } from '../types';
-import { formatNumber } from '../utils/format';
+import { formatNumber, limpiarInputDecimal } from '../utils/format';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
 
@@ -1113,8 +1113,9 @@ export const ModalMovimiento: React.FC<Props> = ({
                     <input
                       type="text"
                       inputMode="decimal"
+                      autoComplete="off"
                       value={montoBancoBs}
-                      onChange={(e) => setMontoBancoBs(e.target.value)}
+                      onChange={(e) => setMontoBancoBs(limpiarInputDecimal(e.target.value))}
                       placeholder="0.00"
                       className="w-full min-h-[42px] pl-9 pr-2.5 py-2 text-sm font-bold border border-zinc-200 rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
                     />
@@ -1134,8 +1135,9 @@ export const ModalMovimiento: React.FC<Props> = ({
                     <input
                       type="text"
                       inputMode="decimal"
+                      autoComplete="off"
                       value={montoEfectivoBs}
-                      onChange={(e) => setMontoEfectivoBs(e.target.value)}
+                      onChange={(e) => setMontoEfectivoBs(limpiarInputDecimal(e.target.value))}
                       placeholder="0.00"
                       className="w-full min-h-[42px] pl-9 pr-2.5 py-2 text-sm font-bold border border-zinc-200 rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
                     />
@@ -1155,8 +1157,9 @@ export const ModalMovimiento: React.FC<Props> = ({
                     <input
                       type="text"
                       inputMode="decimal"
+                      autoComplete="off"
                       value={montoDivisasUsd}
-                      onChange={(e) => setMontoDivisasUsd(e.target.value)}
+                      onChange={(e) => setMontoDivisasUsd(limpiarInputDecimal(e.target.value))}
                       placeholder="0.00"
                       className="w-full min-h-[42px] pl-7 pr-2.5 py-2 text-sm font-bold border border-zinc-200 rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
                     />
@@ -1191,8 +1194,9 @@ export const ModalMovimiento: React.FC<Props> = ({
                   <input
                     type="text"
                     inputMode="decimal"
+                    autoComplete="off"
                     value={tasaAplicada}
-                    onChange={(e) => setTasaAplicada(e.target.value)}
+                    onChange={(e) => setTasaAplicada(limpiarInputDecimal(e.target.value))}
                     className="w-24 px-2 py-1 text-xs font-mono font-bold text-right border border-zinc-200 rounded-lg bg-white text-[#18181B] focus:outline-none focus:ring-1 focus:ring-[#1E3A3A] tabular-nums"
                   />
                 </div>
@@ -1221,8 +1225,9 @@ export const ModalMovimiento: React.FC<Props> = ({
                 <input
                   type="text"
                   inputMode="decimal"
+                  autoComplete="off"
                   value={monto}
-                  onChange={(e) => setMonto(e.target.value)}
+                  onChange={(e) => setMonto(limpiarInputDecimal(e.target.value))}
                   placeholder="0.00"
                   required
                   className="w-full min-h-[48px] pl-11 pr-3.5 py-3 text-base sm:text-lg font-bold border border-zinc-200 rounded-xl bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
@@ -1237,8 +1242,9 @@ export const ModalMovimiento: React.FC<Props> = ({
                     <input
                       type="text"
                       inputMode="decimal"
+                      autoComplete="off"
                       value={tasaAplicada}
-                      onChange={(e) => setTasaAplicada(e.target.value)}
+                      onChange={(e) => setTasaAplicada(limpiarInputDecimal(e.target.value))}
                       className="w-24 px-2 py-1 text-xs font-mono font-bold text-right border border-zinc-200 rounded-lg bg-white text-[#18181B] focus:outline-none focus:ring-1 focus:ring-[#1E3A3A] tabular-nums"
                     />
                     <span className="text-[10px] font-semibold text-zinc-400">Bs/$</span>
@@ -1255,6 +1261,7 @@ export const ModalMovimiento: React.FC<Props> = ({
             </label>
             <input
               type="text"
+              autoComplete="off"
               value={descripcion}
               onChange={(e) => setDescripcion(e.target.value)}
               placeholder={

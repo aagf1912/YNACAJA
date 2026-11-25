@@ -78,3 +78,24 @@ export function formatPorcentaje(value: number): string {
   if (isNaN(value) || !isFinite(value)) return '0.0%';
   return `${value.toFixed(1)}%`;
 }
+
+/**
+ * Limpia y normaliza entradas decimales numéricas para inputs de texto en móvil:
+ * - Permite dígitos, punto y coma.
+ * - Reemplaza automáticamente las comas por puntos.
+ * - Evita tener más de un separador decimal.
+ * - Mantiene el texto intacto mientras el usuario escribe (incluso con '.' pendiente).
+ */
+export function limpiarInputDecimal(valor: string): string {
+  if (!valor) return '';
+  // 1. Reemplazar comas por puntos
+  const conPuntos = valor.replace(/,/g, '.');
+  // 2. Permitir únicamente dígitos y punto
+  const soloValidos = conPuntos.replace(/[^0-9.]/g, '');
+  // 3. Evitar más de un separador decimal
+  const partes = soloValidos.split('.');
+  if (partes.length > 2) {
+    return `${partes[0]}.${partes.slice(1).join('')}`;
+  }
+  return soloValidos;
+}

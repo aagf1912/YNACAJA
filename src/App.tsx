@@ -76,8 +76,16 @@ export const App: React.FC = () => {
         setTimeout(async () => {
           if (session?.user) {
             try {
-              const perf = await getPerfilUsuario(session.user.id);
-              setPerfil(perf);
+              // Si el usuario sigue siendo el mismo, evitar reasignar perfil para no gatillar re-renders o recargas destructivas
+              setPerfil((prev) => {
+                if (prev && prev.id === session.user.id) {
+                  return prev;
+                }
+                getPerfilUsuario(session.user.id)
+                  .then((perf) => setPerfil(perf))
+                  .catch((err) => console.warn('Error cargando perfil en onAuthStateChange:', err));
+                return prev;
+              });
             } catch (err) {
               console.warn('Error cargando perfil en onAuthStateChange:', err);
             }
@@ -168,9 +176,11 @@ export const App: React.FC = () => {
   }, [sincronizarTasaBCVApp]);
 
   // 2. Carga de datos contables y puestos una vez autenticado
-  const cargarDatos = useCallback(async () => {
+  const cargarDatos = useCallback(async (silencioso = false) => {
     if (!perfil) return;
-    setCargandoDatos(true);
+    if (!silencioso && movimientos.length === 0) {
+      setCargandoDatos(true);
+    }
     try {
       const [tasaBcv, cfg, pts, movs] = await Promise.all([
         sincronizarTasaBCVApp(),
@@ -188,7 +198,7 @@ export const App: React.FC = () => {
     } finally {
       setCargandoDatos(false);
     }
-  }, [perfil, sincronizarTasaBCVApp]);
+  }, [perfil, sincronizarTasaBCVApp, movimientos.length]);
 
   useEffect(() => {
     if (perfil) {
@@ -207,7 +217,7 @@ export const App: React.FC = () => {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'movimientos' },
         () => {
-          cargarDatos();
+          cargarDatos(true);
         }
       )
       .subscribe();
@@ -360,7 +370,7 @@ export const App: React.FC = () => {
 
       {/* Contenido Principal */}
       <main className="flex-1 w-full">
-        {cargandoDatos ? (
+        {cargandoAuth || (cargandoDatos && movimientos.length === 0 && puestos.length === 0) ? (
           <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3 text-[#52525B]">
             <Loader2 size={32} className="animate-spin text-[#2C474E]" />
             <span className="text-xs font-semibold">Cargando datos contables...</span>

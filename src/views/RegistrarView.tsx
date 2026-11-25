@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   TrendingDown,
   TrendingUp,
@@ -16,6 +16,7 @@ import {
   Trash2,
   Tag,
   Layers,
+  RotateCcw,
 } from 'lucide-react';
 import {
   CategoriaMovimiento,
@@ -28,7 +29,7 @@ import {
   TipoMovimiento,
 } from '../types';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
-import { formatMontoMovimiento, formatNumber } from '../utils/format';
+import { formatMontoMovimiento, formatNumber, limpiarInputDecimal } from '../utils/format';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { ModalMovimiento } from '../components/ModalMovimiento';
 import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
@@ -45,6 +46,35 @@ interface Props {
 type ModoRegistro = 'gastos' | 'personal' | 'ventas';
 type MetodoPagoFormulario = MetodoPago | 'pago_mixto';
 
+const BORRADOR_KEY = 'ynacaja_borrador_registro';
+
+interface BorradorRegistro {
+  tipo: TipoMovimiento;
+  naturaleza: NaturalezaMovimiento;
+  modo: ModoRegistro;
+  puestoId: string;
+  fecha: string;
+  metodoPago: MetodoPagoFormulario;
+  categoria: CategoriaMovimiento;
+  monto: string;
+  montoMixtoBanco: string;
+  montoMixtoEfectivo: string;
+  montoMixtoDivisas: string;
+  descripcion: string;
+}
+
+const leerBorrador = (): Partial<BorradorRegistro> => {
+  try {
+    const raw = sessionStorage.getItem(BORRADOR_KEY);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (err) {
+    console.warn('Error leyendo borrador de sessionStorage:', err);
+  }
+  return {};
+};
+
 export const RegistrarView: React.FC<Props> = ({
   tasaDia,
   puestos = [],
@@ -53,17 +83,30 @@ export const RegistrarView: React.FC<Props> = ({
   onEliminarMovimiento,
   onRecargarDatos,
 }) => {
-  // Estado del formulario
-  const [modo, setModo] = useState<ModoRegistro>('gastos');
-  const [puestoId, setPuestoId] = useState<string>('');
-  const [fecha, setFecha] = useState<string>(getVenezuelaDate());
-  const [metodoPago, setMetodoPago] = useState<MetodoPagoFormulario>('pago_movil');
-  const [monto, setMonto] = useState<string>('');
-  const [montoBancoBs, setMontoBancoBs] = useState<string>('');
-  const [montoEfectivoBs, setMontoEfectivoBs] = useState<string>('');
-  const [montoDivisasUsd, setMontoDivisasUsd] = useState<string>('');
-  const [descripcion, setDescripcion] = useState<string>('');
-  const [categoriaGasto, setCategoriaGasto] = useState<CategoriaMovimiento>('Materia Prima');
+  // Estado del formulario (restaurado de borrador si existe en sessionStorage)
+  const [modo, setModo] = useState<ModoRegistro>(() => {
+    const b = leerBorrador();
+    return b.modo || (b.tipo === 'venta' ? 'ventas' : b.naturaleza === 'Personal' ? 'personal' : 'gastos');
+  });
+  const [puestoId, setPuestoId] = useState<string>(() => leerBorrador().puestoId || '');
+  const [fecha, setFecha] = useState<string>(() => leerBorrador().fecha || getVenezuelaDate());
+  const [metodoPago, setMetodoPago] = useState<MetodoPagoFormulario>(
+    () => leerBorrador().metodoPago || 'pago_movil'
+  );
+  const [monto, setMonto] = useState<string>(() => leerBorrador().monto || '');
+  const [montoBancoBs, setMontoBancoBs] = useState<string>(
+    () => leerBorrador().montoMixtoBanco || ''
+  );
+  const [montoEfectivoBs, setMontoEfectivoBs] = useState<string>(
+    () => leerBorrador().montoMixtoEfectivo || ''
+  );
+  const [montoDivisasUsd, setMontoDivisasUsd] = useState<string>(
+    () => leerBorrador().montoMixtoDivisas || ''
+  );
+  const [descripcion, setDescripcion] = useState<string>(() => leerBorrador().descripcion || '');
+  const [categoriaGasto, setCategoriaGasto] = useState<CategoriaMovimiento>(
+    () => leerBorrador().categoria || 'Materia Prima'
+  );
 
   // Estado de feedback y guardado
   const [guardando, setGuardando] = useState(false);
@@ -98,6 +141,69 @@ export const RegistrarView: React.FC<Props> = ({
   const numDivisasUsd = parseFloat(montoDivisasUsd.replace(',', '.')) || 0;
   const totalMixtoBs = numBancoBs + numEfectivoBs + (numDivisasUsd * tasaSegura);
   const totalMixtoUsd = tasaSegura > 0 ? totalMixtoBs / tasaSegura : 0;
+
+  // Auto-guardado en sessionStorage cada vez que cambie algún campo
+  useEffect(() => {
+    const tipo: TipoMovimiento = modo === 'ventas' ? 'venta' : 'gasto';
+    const naturaleza: NaturalezaMovimiento =
+      modo === 'ventas' ? 'Ventas' : modo === 'personal' ? 'Personal' : 'Negocio';
+
+    const borrador: BorradorRegistro = {
+      tipo,
+      naturaleza,
+      modo,
+      puestoId,
+      fecha,
+      metodoPago,
+      categoria: categoriaGasto,
+      monto,
+      montoMixtoBanco: montoBancoBs,
+      montoMixtoEfectivo: montoEfectivoBs,
+      montoMixtoDivisas: montoDivisasUsd,
+      descripcion,
+    };
+
+    try {
+      sessionStorage.setItem(BORRADOR_KEY, JSON.stringify(borrador));
+    } catch (err) {
+      console.warn('Error guardando borrador en sessionStorage:', err);
+    }
+  }, [
+    modo,
+    puestoId,
+    fecha,
+    metodoPago,
+    categoriaGasto,
+    monto,
+    montoBancoBs,
+    montoEfectivoBs,
+    montoDivisasUsd,
+    descripcion,
+  ]);
+
+  const hayDatosEnBorrador = Boolean(
+    descripcion.trim() ||
+    monto.trim() ||
+    montoBancoBs.trim() ||
+    montoEfectivoBs.trim() ||
+    montoDivisasUsd.trim()
+  );
+
+  const limpiarBorrador = () => {
+    try {
+      sessionStorage.removeItem(BORRADOR_KEY);
+    } catch (e) {}
+    setMonto('');
+    setMontoBancoBs('');
+    setMontoEfectivoBs('');
+    setMontoDivisasUsd('');
+    setDescripcion('');
+    setPuestoId('');
+    setFecha(getVenezuelaDate());
+    setMetodoPago('pago_movil');
+    setCategoriaGasto('Materia Prima');
+    setErrorMensaje(null);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -265,7 +371,10 @@ export const RegistrarView: React.FC<Props> = ({
           }
         }
 
-        // Limpiar campos de pago mixto
+        // Limpiar campos de pago mixto y borrador
+        try {
+          sessionStorage.removeItem(BORRADOR_KEY);
+        } catch (e) {}
         setMontoBancoBs('');
         setMontoEfectivoBs('');
         setMontoDivisasUsd('');
@@ -328,7 +437,10 @@ export const RegistrarView: React.FC<Props> = ({
         setExitoMensaje(`✓ Guardado con éxito: "${nuevoMov.descripcion}"`);
       }
 
-      // Limpiar únicamente monto y descripción para seguir registrando ágilmente
+      // Limpiar únicamente monto, descripción y borrador para seguir registrando ágilmente
+      try {
+        sessionStorage.removeItem(BORRADOR_KEY);
+      } catch (e) {}
       setMonto('');
       setDescripcion('');
     } catch (err: any) {
@@ -361,10 +473,21 @@ export const RegistrarView: React.FC<Props> = ({
   return (
     <div className="space-y-5 pb-24 pt-3 px-3.5 sm:px-4 max-w-2xl mx-auto">
       {/* Encabezado limpio con aire */}
-      <div className="pt-1">
+      <div className="pt-1 flex items-center justify-between">
         <h1 className="text-lg font-bold text-[#18181B] tracking-tight">
           Registrar Movimiento
         </h1>
+        {hayDatosEnBorrador && (
+          <button
+            type="button"
+            onClick={limpiarBorrador}
+            className="text-xs text-zinc-400 hover:text-zinc-600 flex items-center gap-1.5 transition-colors px-2 py-1 rounded-lg hover:bg-zinc-100 cursor-pointer"
+            title="Limpiar borrador"
+          >
+            <RotateCcw size={12} />
+            <span>Limpiar</span>
+          </button>
+        )}
       </div>
 
       {/* Tarjeta Principal del Formulario */}
@@ -619,8 +742,9 @@ export const RegistrarView: React.FC<Props> = ({
                     <input
                       type="text"
                       inputMode="decimal"
+                      autoComplete="off"
                       value={montoBancoBs}
-                      onChange={(e) => setMontoBancoBs(e.target.value)}
+                      onChange={(e) => setMontoBancoBs(limpiarInputDecimal(e.target.value))}
                       placeholder="0.00"
                       className="w-full min-h-[42px] pl-9 pr-2.5 py-2 text-sm sm:text-base font-bold border border-zinc-200 rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
                     />
@@ -640,8 +764,9 @@ export const RegistrarView: React.FC<Props> = ({
                     <input
                       type="text"
                       inputMode="decimal"
+                      autoComplete="off"
                       value={montoEfectivoBs}
-                      onChange={(e) => setMontoEfectivoBs(e.target.value)}
+                      onChange={(e) => setMontoEfectivoBs(limpiarInputDecimal(e.target.value))}
                       placeholder="0.00"
                       className="w-full min-h-[42px] pl-9 pr-2.5 py-2 text-sm sm:text-base font-bold border border-zinc-200 rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
                     />
@@ -661,8 +786,9 @@ export const RegistrarView: React.FC<Props> = ({
                     <input
                       type="text"
                       inputMode="decimal"
+                      autoComplete="off"
                       value={montoDivisasUsd}
-                      onChange={(e) => setMontoDivisasUsd(e.target.value)}
+                      onChange={(e) => setMontoDivisasUsd(limpiarInputDecimal(e.target.value))}
                       placeholder="0.00"
                       className="w-full min-h-[42px] pl-7 pr-2.5 py-2 text-sm sm:text-base font-bold border border-zinc-200 rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
                     />
@@ -713,8 +839,9 @@ export const RegistrarView: React.FC<Props> = ({
                 <input
                   type="text"
                   inputMode="decimal"
+                  autoComplete="off"
                   value={monto}
-                  onChange={(e) => setMonto(e.target.value)}
+                  onChange={(e) => setMonto(limpiarInputDecimal(e.target.value))}
                   placeholder="0.00"
                   required
                   className="w-full min-h-[48px] pl-11 pr-3.5 py-3 text-base sm:text-lg font-bold border border-zinc-200 rounded-xl bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
@@ -730,6 +857,7 @@ export const RegistrarView: React.FC<Props> = ({
             </label>
             <input
               type="text"
+              autoComplete="off"
               value={descripcion}
               onChange={(e) => setDescripcion(e.target.value)}
               placeholder={
