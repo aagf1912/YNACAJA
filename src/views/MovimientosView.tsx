@@ -9,7 +9,13 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
-import { Movimiento, Puesto, TipoMovimiento } from '../types';
+import {
+  CategoriaMovimiento,
+  Movimiento,
+  NaturalezaMovimiento,
+  Puesto,
+  TipoMovimiento,
+} from '../types';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
 import { calcularMontos, formatUSD, formatVES, formatNumber } from '../utils/format';
 import { METODOS_PAGO_LABELS } from '../types';
@@ -40,12 +46,28 @@ interface GrupoCierreRender {
   totalBs: number;
 }
 
+interface GrupoMixtoRender {
+  tipo: 'mixto';
+  key: string;
+  fecha: string;
+  descripcion: string;
+  descripcionLimpia: string;
+  naturaleza: NaturalezaMovimiento;
+  categoria: CategoriaMovimiento;
+  puestoId: string | null;
+  puestoNombre: string | null;
+  tasaAplicada: number;
+  items: Movimiento[];
+  totalUSD: number;
+  totalBs: number;
+}
+
 interface ItemIndividualRender {
   tipo: 'individual';
   movimiento: Movimiento;
 }
 
-type ElementoRender = GrupoCierreRender | ItemIndividualRender;
+type ElementoRender = GrupoCierreRender | GrupoMixtoRender | ItemIndividualRender;
 
 export const MovimientosView: React.FC<Props> = ({
   movimientos,
@@ -60,17 +82,26 @@ export const MovimientosView: React.FC<Props> = ({
   const [filtroPuesto, setFiltroPuesto] = useState<string>('todos');
   const [busqueda, setBusqueda] = useState('');
   const [movimientoParaEditar, setMovimientoParaEditar] = useState<Movimiento | null>(null);
+  const [grupoMixtoParaEditar, setGrupoMixtoParaEditar] = useState<Movimiento[] | null>(null);
   const [modalAbierto, setModalAbierto] = useState(false);
 
   // Estados para Modal de Cierre de Puesto (Administrador)
   const [modalCierreAbierto, setModalCierreAbierto] = useState<boolean>(false);
   const [cierreParaEditar, setCierreParaEditar] = useState<{ puestoId: string; fecha: string } | null>(null);
   const [cierresExpandidos, setCierresExpandidos] = useState<Record<string, boolean>>({});
+  const [mixtosExpandidos, setMixtosExpandidos] = useState<Record<string, boolean>>({});
 
   const toggleCierre = (cierreKey: string) => {
     setCierresExpandidos((prev) => ({
       ...prev,
       [cierreKey]: !prev[cierreKey],
+    }));
+  };
+
+  const toggleMixto = (mixtoKey: string) => {
+    setMixtosExpandidos((prev) => ({
+      ...prev,
+      [mixtoKey]: !prev[mixtoKey],
     }));
   };
 
@@ -142,13 +173,18 @@ export const MovimientosView: React.FC<Props> = ({
         }
       }
 
-      // Agrupar cierres diarios de puestos en una sola tarjeta unificada
+      // Agrupar cierres diarios de puestos y gastos de Pago Mixto en tarjetas unificadas
       const mapaCierres: Record<string, GrupoCierreRender> = {};
       const ordenCierres: string[] = [];
-      const individuales: Movimiento[] = [];
+      const mapaMixtos: Record<string, GrupoMixtoRender> = {};
+      const otrosElementos: ElementoRender[] = [];
 
       for (const m of items) {
-        const esCierre = m.tipo === 'venta' && Boolean(m.puesto_id) && (m.descripcion || '').startsWith('Cierre ');
+        const descRaw = (m.descripcion || '').trim();
+        const esCierre = m.tipo === 'venta' && Boolean(m.puesto_id) && descRaw.startsWith('Cierre ');
+        const esPagoMixto =
+          (m.tipo === 'gasto' || m.tipo === 'egreso') && descRaw.endsWith('(Pago Mixto)');
+
         if (esCierre && m.puesto_id) {
           const pId = m.puesto_id;
           if (!mapaCierres[pId]) {
@@ -169,18 +205,43 @@ export const MovimientosView: React.FC<Props> = ({
           mapaCierres[pId].items.push(m);
           mapaCierres[pId].totalUSD += monto_usd;
           mapaCierres[pId].totalBs += monto_bs;
+        } else if (esPagoMixto) {
+          const mixtoKey = `${fecha}__${descRaw}__${m.naturaleza}__${m.categoria}__${m.puesto_id || ''}`;
+          if (!mapaMixtos[mixtoKey]) {
+            const nombrePuesto = m.puesto?.nombre || (m.puesto_id ? mapaPuestos[m.puesto_id] : null) || null;
+            const tasaItem = Number(m.tasa_aplicada) || Number(m.tasa) || tasaDia;
+            const descLimpia = descRaw.replace(/\s*\(Pago Mixto\)\s*$/i, '').trim() || descRaw;
+            const grupoMixto: GrupoMixtoRender = {
+              tipo: 'mixto',
+              key: mixtoKey,
+              fecha,
+              descripcion: descRaw,
+              descripcionLimpia: descLimpia,
+              naturaleza: m.naturaleza,
+              categoria: m.categoria,
+              puestoId: m.puesto_id || null,
+              puestoNombre: nombrePuesto,
+              tasaAplicada: tasaItem,
+              items: [],
+              totalUSD: 0,
+              totalBs: 0,
+            };
+            mapaMixtos[mixtoKey] = grupoMixto;
+            otrosElementos.push(grupoMixto);
+          }
+          const { monto_usd, monto_bs } = calcularMontos(m);
+          mapaMixtos[mixtoKey].items.push(m);
+          mapaMixtos[mixtoKey].totalUSD += monto_usd;
+          mapaMixtos[mixtoKey].totalBs += monto_bs;
         } else {
-          individuales.push(m);
+          otrosElementos.push({ tipo: 'individual', movimiento: m });
         }
       }
 
-      const elementos: ElementoRender[] = [];
-      for (const pId of ordenCierres) {
-        elementos.push(mapaCierres[pId]);
-      }
-      for (const ind of individuales) {
-        elementos.push({ tipo: 'individual', movimiento: ind });
-      }
+      const elementos: ElementoRender[] = [
+        ...ordenCierres.map((pId) => mapaCierres[pId]),
+        ...otrosElementos,
+      ];
 
       return {
         fecha,
@@ -190,7 +251,7 @@ export const MovimientosView: React.FC<Props> = ({
         totalGastosUSD,
       };
     });
-  }, [movimientosFiltrados, mapaPuestos]);
+  }, [movimientosFiltrados, mapaPuestos, tasaDia]);
 
   const handleEliminar = async (id: string) => {
     if (window.confirm('¿Deseas eliminar definitivamente este movimiento?')) {
@@ -229,6 +290,53 @@ export const MovimientosView: React.FC<Props> = ({
     } catch (err: any) {
       console.error('Error al eliminar cierre:', err);
       alert(err?.message || 'Error al eliminar el cierre.');
+    }
+  };
+
+  const handleEliminarGrupoMixto = async (mixto: GrupoMixtoRender) => {
+    const confirmacion = window.confirm(
+      `¿Estás seguro de que deseas eliminar el Pago Mixto "${mixto.descripcionLimpia}" del día ${mixto.fecha}? Se eliminarán los ${mixto.items.length} registros que lo componen.`
+    );
+    if (!confirmacion) return;
+
+    const ids = mixto.items.map((m) => m.id).filter(Boolean);
+    if (ids.length === 0) return;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const token = getAccessTokenFromStorage() || supabaseAnonKey;
+      const url = `${supabaseUrl}/rest/v1/movimientos?id=in.(${ids.join(',')})`;
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+        },
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        let errMsg = 'Error al eliminar el pago mixto';
+        try {
+          const errData = await res.json();
+          errMsg = errData?.message || errData?.error_description || errMsg;
+        } catch {
+          const text = await res.text();
+          if (text) errMsg = text;
+        }
+        throw new Error(errMsg);
+      }
+
+      if (onRecargarDatos) {
+        await onRecargarDatos();
+      }
+    } catch (err: any) {
+      console.error('Error al eliminar pago mixto:', err);
+      alert(err?.message || 'Error al eliminar el pago mixto.');
+    } finally {
+      clearTimeout(timeoutId);
     }
   };
 
@@ -273,6 +381,7 @@ export const MovimientosView: React.FC<Props> = ({
             type="button"
             onClick={() => {
               setMovimientoParaEditar(null);
+              setGrupoMixtoParaEditar(null);
               setModalAbierto(true);
             }}
             className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-[#1E3A3A] text-white rounded-lg hover:bg-[#172e2e] active:bg-[#102222] transition-colors cursor-pointer shadow-xs"
@@ -545,6 +654,130 @@ export const MovimientosView: React.FC<Props> = ({
                     );
                   }
 
+                  if (elem.tipo === 'mixto') {
+                    const mixto = elem;
+                    const estaExpandido = Boolean(mixtosExpandidos[mixto.key]);
+
+                    return (
+                      <div key={mixto.key} className="bg-white transition-colors">
+                        {/* Cabecera Clickeable para Expandir/Contraer */}
+                        <div
+                          onClick={() => toggleMixto(mixto.key)}
+                          className="p-3.5 hover:bg-zinc-50/70 cursor-pointer transition-colors"
+                        >
+                          {/* Línea 1: Descripción limpia a la izquierda + Total sumado en Bs y USD a la derecha */}
+                          <div className="flex items-start justify-between gap-3">
+                            <span className="text-xs sm:text-sm font-bold text-[#18181B] truncate leading-snug pt-0.5">
+                              {mixto.descripcionLimpia}
+                            </span>
+                            <div className="text-right shrink-0">
+                              <span className="block text-xs sm:text-sm font-bold tabular-nums whitespace-nowrap leading-snug text-[#991B1B]">
+                                - {formatNumber(mixto.totalBs)} Bs
+                              </span>
+                              <span className="block text-[10px] sm:text-[11px] text-zinc-400 tabular-nums whitespace-nowrap">
+                                {formatUSD(mixto.totalUSD)}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Línea 2: Badge naturaleza + Badge Pago Mixto + metadatos + Editar/Eliminar/Chevron */}
+                          <div className="flex items-center justify-between gap-2 mt-1.5">
+                            <div className="flex items-center gap-1.5 min-w-0 flex-1 flex-wrap">
+                              <BadgeNaturaleza
+                                naturaleza={mixto.naturaleza}
+                                tipo="gasto"
+                                className="shrink-0"
+                              />
+                              <span className="text-[10px] font-bold text-[#2C474E] bg-zinc-100 border border-zinc-200 px-1.5 py-0.5 rounded shrink-0">
+                                Pago Mixto
+                              </span>
+                              <span className="text-[11px] text-zinc-500 truncate">
+                                {mixto.categoria}
+                                {mixto.puestoNombre ? ` · ${mixto.puestoNombre}` : ''}
+                                {` · Tasa ${formatNumber(mixto.tasaAplicada)}`}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-0.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setMovimientoParaEditar(null);
+                                  setGrupoMixtoParaEditar(mixto.items);
+                                  setModalAbierto(true);
+                                }}
+                                className="p-1.5 text-zinc-400 hover:text-[#1E3A3A] hover:bg-zinc-100 rounded-lg transition-colors cursor-pointer"
+                                title="Editar pago mixto"
+                              >
+                                <Pencil size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEliminarGrupoMixto(mixto);
+                                }}
+                                className="p-1.5 text-zinc-400 hover:text-[#991B1B] hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                                title="Eliminar pago mixto completo"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                              <div className="p-1 text-zinc-400">
+                                {estaExpandido ? (
+                                  <ChevronUp size={15} />
+                                ) : (
+                                  <ChevronDown size={15} />
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Detalle Desplegable con las partes del Pago Mixto */}
+                        {estaExpandido && (
+                          <div className="bg-[#FAFAFA] border-t border-[#E4E4E7] px-3.5 py-2.5 space-y-1.5">
+                            <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">
+                              Desglose por Bolsillo ({mixto.items.length}{' '}
+                              {mixto.items.length === 1 ? 'parte' : 'partes'}):
+                            </span>
+                            <div className="divide-y divide-zinc-200 bg-white border border-zinc-200 rounded-lg overflow-hidden">
+                              {mixto.items.map((m) => {
+                                const { monto_usd, monto_bs } = calcularMontos(m);
+                                const metodoLabel =
+                                  METODOS_PAGO_LABELS[m.metodo_pago] || m.metodo_pago;
+                                const esParteUSD = m.moneda_original === 'USD';
+
+                                return (
+                                  <div
+                                    key={m.id}
+                                    className="p-2.5 flex items-center justify-between text-xs hover:bg-zinc-50/50"
+                                  >
+                                    <span className="font-bold text-[#18181B]">
+                                      {metodoLabel}
+                                    </span>
+                                    <div className="text-right tabular-nums">
+                                      <span className="font-mono font-bold text-[#991B1B] mr-2">
+                                        {esParteUSD
+                                          ? formatUSD(monto_usd)
+                                          : `${formatNumber(monto_bs)} Bs`}
+                                      </span>
+                                      <span className="font-mono text-[11px] text-zinc-400">
+                                        {esParteUSD
+                                          ? `(${formatNumber(monto_bs)} Bs)`
+                                          : `(${formatUSD(monto_usd)})`}
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
                   // Movimiento Individual (Gastos, retiros o ventas manuales) — 2 líneas limpias
                   const item = elem.movimiento;
                   const nombrePuesto =
@@ -602,6 +835,7 @@ export const MovimientosView: React.FC<Props> = ({
                           <button
                             type="button"
                             onClick={() => {
+                              setGrupoMixtoParaEditar(null);
                               setMovimientoParaEditar(item);
                               setModalAbierto(true);
                             }}
@@ -633,11 +867,13 @@ export const MovimientosView: React.FC<Props> = ({
       <ModalMovimiento
         isOpen={modalAbierto}
         movimientoAEditar={movimientoParaEditar}
+        grupoMixtoEditar={grupoMixtoParaEditar}
         tasaActual={tasaDia}
         puestos={puestos}
         onClose={() => {
           setModalAbierto(false);
           setMovimientoParaEditar(null);
+          setGrupoMixtoParaEditar(null);
         }}
         onGuardar={handleGuardarModal}
         onRecargarDatos={onRecargarDatos}

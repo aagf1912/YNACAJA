@@ -38,6 +38,7 @@ export interface CambioModalInfo {
 interface Props {
   isOpen: boolean;
   movimientoAEditar?: Movimiento | null;
+  grupoMixtoEditar?: Movimiento[] | null;
   tasaActual: number;
   soloVenta?: boolean;
   puestos?: Puesto[];
@@ -74,6 +75,7 @@ const normalizarMetodoPago = (raw?: string): MetodoPago => {
 export const ModalMovimiento: React.FC<Props> = ({
   isOpen,
   movimientoAEditar,
+  grupoMixtoEditar,
   tasaActual,
   soloVenta = false,
   puestos = [],
@@ -108,7 +110,63 @@ export const ModalMovimiento: React.FC<Props> = ({
     if (!isOpen) return;
 
     const hoyVzla = getVenezuelaDate();
-    if (movimientoAEditar) {
+    if (grupoMixtoEditar && grupoMixtoEditar.length > 0) {
+      const base = grupoMixtoEditar[0];
+      const esPersonal =
+        base.naturaleza === 'Personal' ||
+        base.categoria === 'Personal / Ocio / Regalos' ||
+        base.categoria === 'Comidas y Bebidas';
+
+      setModo(esPersonal ? 'personal' : 'gastos');
+      setPuestoId(base.puesto_id || '');
+      setFecha(base.fecha || hoyVzla);
+      setMetodoPago('pago_mixto');
+      setCategoriaGasto(
+        base.categoria || (esPersonal ? 'Personal / Ocio / Regalos' : 'Materia Prima')
+      );
+      setDescripcion(
+        (base.descripcion || '').replace(/\s*\(Pago Mixto\)\s*$/i, '').trim()
+      );
+      setMonto('');
+
+      const tasaInit =
+        Number(base.tasa_aplicada) ||
+        Number(base.tasa) ||
+        (tasaActual > 0 ? tasaActual : 100);
+      setTasaAplicada(String(tasaInit));
+
+      let bancoBs = 0;
+      let efectivoBs = 0;
+      let divisasUsd = 0;
+
+      for (const item of grupoMixtoEditar) {
+        const mNorm = normalizarMetodoPago(item.metodo_pago);
+        const orig = Number(item.monto_original) || 0;
+        if (mNorm === 'pago_movil' || mNorm === 'punto_venta') {
+          bancoBs +=
+            Number(item.monto_bs) ||
+            (item.moneda_original === 'VES' ? orig : orig * tasaInit);
+        } else if (mNorm === 'efectivo_bs') {
+          efectivoBs +=
+            Number(item.monto_bs) ||
+            (item.moneda_original === 'VES' ? orig : orig * tasaInit);
+        } else if (mNorm === 'divisa') {
+          divisasUsd +=
+            Number(item.monto_usd) ||
+            (item.moneda_original === 'USD' ? orig : tasaInit > 0 ? orig / tasaInit : 0);
+        }
+      }
+
+      setMontoBancoBs(
+        bancoBs > 0 ? String(Math.round(bancoBs * 100) / 100) : ''
+      );
+      setMontoEfectivoBs(
+        efectivoBs > 0 ? String(Math.round(efectivoBs * 100) / 100) : ''
+      );
+      setMontoDivisasUsd(
+        divisasUsd > 0 ? String(Math.round(divisasUsd * 100) / 100) : ''
+      );
+    } else if (movimientoAEditar) {
       const esVenta =
         movimientoAEditar.tipo === 'venta' || movimientoAEditar.tipo === 'ingreso';
       const esPersonal =
@@ -137,6 +195,9 @@ export const ModalMovimiento: React.FC<Props> = ({
         Number(movimientoAEditar.tasa) ||
         (tasaActual > 0 ? tasaActual : 100);
       setTasaAplicada(String(tasaInit));
+      setMontoBancoBs('');
+      setMontoEfectivoBs('');
+      setMontoDivisasUsd('');
     } else {
       setModo(soloVenta ? 'ventas' : 'gastos');
       setPuestoId(puestoIdPorDefecto || '');
@@ -146,17 +207,18 @@ export const ModalMovimiento: React.FC<Props> = ({
       setDescripcion('');
       setMonto('');
       setTasaAplicada(String(tasaActual > 0 ? tasaActual : 100));
+      setMontoBancoBs('');
+      setMontoEfectivoBs('');
+      setMontoDivisasUsd('');
     }
 
-    setMontoBancoBs('');
-    setMontoEfectivoBs('');
-    setMontoDivisasUsd('');
     setErrorMensaje(null);
-  }, [movimientoAEditar, isOpen, tasaActual, soloVenta, puestoIdPorDefecto]);
+  }, [movimientoAEditar, grupoMixtoEditar, isOpen, tasaActual, soloVenta, puestoIdPorDefecto]);
 
   if (!isOpen) return null;
 
-  const esEdicion = Boolean(movimientoAEditar?.id);
+  const esEdicionMixto = Boolean(grupoMixtoEditar && grupoMixtoEditar.length > 0);
+  const esEdicion = Boolean(movimientoAEditar?.id || esEdicionMixto);
   const esEdicionFechaAnterior = Boolean(
     esEdicion && fecha && fecha < fechaHoyVzla
   );
@@ -443,8 +505,31 @@ export const ModalMovimiento: React.FC<Props> = ({
       const timeoutId = setTimeout(() => controller.abort(), 8000);
 
       try {
-        // Si estamos editando, eliminamos primero el registro original para evitar duplicados
-        if (esEdicion && movimientoAEditar?.id) {
+        // Si estamos editando (un movimiento individual o un grupo mixto), eliminamos primero los registros anteriores para evitar duplicados
+        if (esEdicionMixto && grupoMixtoEditar) {
+          const idsAEliminar = grupoMixtoEditar.map((m) => m.id).filter(Boolean);
+          if (idsAEliminar.length > 0) {
+            const resDeleteGrupo = await fetch(
+              `${supabaseUrl}/rest/v1/movimientos?id=in.(${idsAEliminar.join(',')})`,
+              {
+                method: 'DELETE',
+                headers: {
+                  apikey: supabaseAnonKey,
+                  Authorization: `Bearer ${token}`,
+                },
+                signal: controller.signal,
+              }
+            );
+
+            if (!resDeleteGrupo.ok) {
+              const errMsg = await extraerErrorResponse(
+                resDeleteGrupo,
+                `Error ${resDeleteGrupo.status} al eliminar los registros anteriores del pago mixto`
+              );
+              throw new Error(errMsg);
+            }
+          }
+        } else if (esEdicion && movimientoAEditar?.id) {
           const resDelete = await fetch(
             `${supabaseUrl}/rest/v1/movimientos?id=eq.${movimientoAEditar.id}`,
             {
@@ -535,7 +620,84 @@ export const ModalMovimiento: React.FC<Props> = ({
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     try {
-      if (esEdicion && movimientoAEditar?.id) {
+      if (esEdicionMixto && grupoMixtoEditar) {
+        const idsAEliminar = grupoMixtoEditar.map((m) => m.id).filter(Boolean);
+        if (idsAEliminar.length > 0) {
+          const resDeleteGrupo = await fetch(
+            `${supabaseUrl}/rest/v1/movimientos?id=in.(${idsAEliminar.join(',')})`,
+            {
+              method: 'DELETE',
+              headers: {
+                apikey: supabaseAnonKey,
+                Authorization: `Bearer ${token}`,
+              },
+              signal: controller.signal,
+            }
+          );
+
+          if (!resDeleteGrupo.ok) {
+            const errMsg = await extraerErrorResponse(
+              resDeleteGrupo,
+              `Error ${resDeleteGrupo.status} al reemplazar el pago mixto`
+            );
+            throw new Error(errMsg);
+          }
+        }
+
+        const nuevoId = crypto.randomUUID
+          ? crypto.randomUUID()
+          : `mov_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+        const postPayload = {
+          id: nuevoId,
+          fecha,
+          descripcion: descripcion.trim(),
+          tipo: tipoMov,
+          naturaleza: natMov,
+          categoria: catMov,
+          metodo_pago: metodoFinal,
+          moneda_original: monedaOriginal,
+          moneda: monedaOriginal,
+          monto_original: mNum,
+          monto_bs: montoBs,
+          monto_usd: montoUSD,
+          tasa_aplicada: tasaSegura,
+          tasa: tasaSegura,
+          puesto_id: puestoId || null,
+        };
+
+        const resPost = await fetch(`${supabaseUrl}/rest/v1/movimientos`, {
+          method: 'POST',
+          headers: headersJson,
+          body: JSON.stringify([postPayload]),
+          signal: controller.signal,
+        });
+
+        if (!resPost.ok) {
+          const errMsg = await extraerErrorResponse(
+            resPost,
+            `Error ${resPost.status} al guardar el movimiento`
+          );
+          throw new Error(errMsg);
+        }
+
+        const dataPost = await resPost.json();
+        const creados: Movimiento[] =
+          Array.isArray(dataPost) && dataPost.length > 0
+            ? dataPost
+            : [postPayload as Movimiento];
+
+        onCambioCompletado?.({
+          accion: 'creado',
+          registros: creados,
+        });
+
+        if (onRecargarDatos) {
+          await onRecargarDatos();
+        }
+
+        onClose();
+      } else if (esEdicion && movimientoAEditar?.id) {
         const patchPayload = {
           fecha,
           descripcion: descripcion.trim(),
@@ -670,7 +832,9 @@ export const ModalMovimiento: React.FC<Props> = ({
         <div className="bg-[#1E3A3A] text-white px-4 sm:px-5 py-3.5 flex items-center justify-between shrink-0">
           <div>
             <h2 className="font-bold text-sm sm:text-base tracking-tight leading-tight">
-              {esEdicion
+              {esEdicionMixto
+                ? 'Editar Pago Mixto'
+                : esEdicion
                 ? 'Editar Movimiento'
                 : soloVenta
                 ? 'Registrar Venta'
@@ -1154,7 +1318,11 @@ export const ModalMovimiento: React.FC<Props> = ({
                 <>
                   <CheckCircle2 size={16} />
                   <span>
-                    {esEdicion
+                    {esEdicionMixto
+                      ? metodoPago === 'pago_mixto'
+                        ? 'Guardar Pago Mixto'
+                        : 'Guardar Cambios'
+                      : esEdicion
                       ? metodoPago === 'pago_mixto' && (modo === 'gastos' || modo === 'personal')
                         ? 'Convertir a Pago Mixto'
                         : 'Guardar Cambios'
