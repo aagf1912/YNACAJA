@@ -5,6 +5,7 @@ import { Movimiento } from '../types';
  */
 export function formatNumber(amount: number, decimals: number = 2): string {
   if (isNaN(amount) || amount === null || amount === undefined) return '0.00';
+  if (Math.abs(amount) < 0.005 || Object.is(amount, -0)) return '0.00';
   return amount.toLocaleString('en-US', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,

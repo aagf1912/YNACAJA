@@ -189,11 +189,7 @@ export const ResumenMensualView: React.FC<Props> = ({
     <div className="space-y-4">
       {/* 1. Selector de Filtro por Puesto */}
       {puestos.length > 0 && (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-          <span className="text-[11px] font-bold text-[#52525B] flex items-center gap-1 shrink-0">
-            <Store size={13} className="text-[#2C474E]" />
-            Ver puesto:
-          </span>
+        <div className="flex items-center justify-start gap-2 overflow-x-auto pb-1 scrollbar-none w-full">
           <button
             type="button"
             onClick={() => onFiltroPuestoChange('todos')}

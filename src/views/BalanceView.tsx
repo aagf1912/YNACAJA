@@ -64,18 +64,56 @@ const normalizarMetodoPago = (
     .replace(/[\u0300-\u036f]/g, '')
     .trim();
 
-  if (norm === 'pago_movil' || norm.includes('pago movil') || norm.includes('pagomovil') || norm === 'pm') {
-    return 'pago_movil';
-  }
-  if (norm === 'punto_venta' || norm.includes('punto') || norm === 'pos') {
-    return 'punto_venta';
-  }
-  if (norm === 'efectivo_bs' || norm === 'efectivo' || norm.includes('efectivo bs') || norm === 'bs_efectivo') {
-    return 'efectivo_bs';
-  }
-  if (norm === 'divisa' || norm === 'divisas' || norm.includes('divisa') || norm === 'usd' || norm === '$') {
+  // Divisas / USD / Dólares
+  if (
+    norm === 'divisa' ||
+    norm === 'divisas' ||
+    norm.includes('divisa') ||
+    norm.includes('dolar') ||
+    norm === 'usd' ||
+    norm === '$' ||
+    norm.includes('usd') ||
+    norm.includes('zelle')
+  ) {
     return 'divisa';
   }
+
+  // Efectivo Bs
+  if (
+    norm === 'efectivo_bs' ||
+    norm === 'efectivo' ||
+    norm.includes('efectivo bs') ||
+    norm.includes('efectivo (bs)') ||
+    norm === 'bs_efectivo' ||
+    norm.includes('billetes bs') ||
+    norm.includes('bolivares')
+  ) {
+    return 'efectivo_bs';
+  }
+
+  // Pago Móvil / Digital / Banco
+  if (
+    norm === 'pago_movil' ||
+    norm.includes('pago movil') ||
+    norm.includes('pagomovil') ||
+    norm === 'pm' ||
+    norm.includes('transferencia') ||
+    norm.includes('banco')
+  ) {
+    return 'pago_movil';
+  }
+
+  // Punto de Venta
+  if (
+    norm === 'punto_venta' ||
+    norm.includes('punto') ||
+    norm === 'pos' ||
+    norm.includes('biopago') ||
+    norm.includes('tarjeta')
+  ) {
+    return 'punto_venta';
+  }
+
   return null;
 };
 
@@ -187,7 +225,7 @@ export const BalanceView: React.FC<Props> = ({
   // Si los movimientos pasados por prop se actualizan (por ejemplo desde App.tsx), sincronizar
   useEffect(() => {
     if (movimientos && movimientos.length > 0) {
-      setMovimientosHistoricos((prev) => (prev.length === 0 ? movimientos : prev));
+      setMovimientosHistoricos(movimientos);
     }
   }, [movimientos]);
 
@@ -200,38 +238,42 @@ export const BalanceView: React.FC<Props> = ({
     const baseMovs = movimientosHistoricos.length > 0 ? movimientosHistoricos : movimientos;
 
     for (const m of baseMovs) {
-      const esVenta = m.tipo === 'venta' || m.tipo === 'ingreso';
-      const esGasto = m.tipo === 'gasto' || m.tipo === 'egreso';
+      const tipoNorm = (m.tipo || '').toString().toLowerCase().trim();
+      const esVenta = tipoNorm === 'venta' || tipoNorm === 'ingreso';
+      const esGasto = tipoNorm === 'gasto' || tipoNorm === 'egreso';
       if (!esVenta && !esGasto) continue;
 
-      const montoOrig = Number(m.monto_original) || 0;
-      const montoBs =
-        Number(m.monto_bs) ||
-        (m.moneda_original === 'VES' ? montoOrig : montoOrig * (Number(m.tasa) || tasaActual));
-      const montoUsd =
-        Number(m.monto_usd) ||
-        (m.moneda_original === 'USD'
-          ? montoOrig
-          : tasaActual > 0
-          ? montoOrig / tasaActual
-          : 0);
-
+      const tasaMov = Number(m.tasa_aplicada) || Number(m.tasa) || (tasaActual > 0 ? tasaActual : 100);
+      const montoOrig = Math.abs(Number(m.monto_original) || 0);
+      const moneda = (m.moneda_original || m.moneda || '').toUpperCase();
       const metodoNorm = normalizarMetodoPago(m.metodo_pago);
+      const esUSD = moneda === 'USD' || metodoNorm === 'divisa';
+
+      const montoBs =
+        m.monto_bs !== undefined && m.monto_bs !== null && !isNaN(Number(m.monto_bs)) && Number(m.monto_bs) !== 0
+          ? Math.abs(Number(m.monto_bs))
+          : (esUSD ? montoOrig * tasaMov : montoOrig);
+
+      const montoUsd =
+        m.monto_usd !== undefined && m.monto_usd !== null && !isNaN(Number(m.monto_usd)) && Number(m.monto_usd) !== 0
+          ? Math.abs(Number(m.monto_usd))
+          : (esUSD ? montoOrig : (tasaMov > 0 ? montoOrig / tasaMov : 0));
+
       if (metodoNorm === 'pago_movil' || metodoNorm === 'punto_venta') {
         if (esVenta) digitalBs += montoBs;
         if (esGasto) digitalBs -= montoBs;
       } else if (metodoNorm === 'efectivo_bs') {
         if (esVenta) efectivoBs += montoBs;
         if (esGasto) efectivoBs -= montoBs;
-      } else if (metodoNorm === 'divisa') {
+      } else if (metodoNorm === 'divisa' || (!metodoNorm && esUSD)) {
         if (esVenta) divisasUsd += montoUsd;
         if (esGasto) divisasUsd -= montoUsd;
       }
     }
 
     for (const t of transferencias) {
-      const montoDestino = Number(t.monto_destino ?? t.monto_recibido ?? t.monto ?? 0);
-      const montoOrigen = Number(t.monto_origen ?? t.monto_salida ?? t.monto ?? 0);
+      const montoDestino = Math.abs(Number(t.monto_destino ?? t.monto_recibido ?? t.monto ?? 0));
+      const montoOrigen = Math.abs(Number(t.monto_origen ?? t.monto_salida ?? t.monto ?? 0));
 
       // Sumar al destino
       if (t.destino === 'digital_bs') digitalBs += montoDestino;
@@ -245,7 +287,7 @@ export const BalanceView: React.FC<Props> = ({
     }
 
     const limpiarCero = (val: number): number => {
-      if (Math.abs(val) < 0.005 || Object.is(val, -0)) return 0;
+      if (isNaN(val) || Math.abs(val) < 0.005 || Object.is(val, -0)) return 0;
       return val;
     };
 
@@ -417,6 +459,7 @@ export const BalanceView: React.FC<Props> = ({
 
       // Recargar liquidaciones_semanales y movimientos para actualizar inmediatamente la interfaz
       await cargarLiquidaciones();
+      await cargarDatosCajaYMovimientos();
       if (onRecargarDatos) {
         await onRecargarDatos();
       }
@@ -1042,11 +1085,7 @@ export const BalanceView: React.FC<Props> = ({
         <>
           {/* 1. SELECTOR DE FILTRO POR PUESTO */}
       {puestos.length > 0 && (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-          <span className="text-[11px] font-bold text-[#52525B] flex items-center gap-1 shrink-0">
-            <Store size={13} className="text-[#2C474E]" />
-            Ver puesto:
-          </span>
+        <div className="flex items-center justify-start gap-2 overflow-x-auto pb-1 scrollbar-none w-full">
           <button
             type="button"
             onClick={() => setFiltroPuesto('todos')}
