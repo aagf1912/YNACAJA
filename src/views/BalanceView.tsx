@@ -212,16 +212,24 @@ export const BalanceView: React.FC<Props> = ({
       else if (t.origen === 'divisas_usd') divisasUsd -= montoOrigen;
     }
 
+    const limpiarCero = (val: number): number => {
+      if (Math.abs(val) < 0.005 || Object.is(val, -0)) return 0;
+      return val;
+    };
+
+    const dBs = limpiarCero(digitalBs);
+    const eBs = limpiarCero(efectivoBs);
+    const dUsd = limpiarCero(divisasUsd);
     const tasaBcvOficial = tasaActual > 0 ? tasaActual : 100;
-    const totalConsolidadoUsd = divisasUsd + (digitalBs + efectivoBs) / tasaBcvOficial;
-    const totalConsolidadoBs = divisasUsd * tasaBcvOficial + digitalBs + efectivoBs;
+    const totUsd = limpiarCero(dUsd + (dBs + eBs) / tasaBcvOficial);
+    const totBs = limpiarCero(dUsd * tasaBcvOficial + dBs + eBs);
 
     return {
-      digitalBs,
-      efectivoBs,
-      divisasUsd,
-      totalConsolidadoUsd,
-      totalConsolidadoBs,
+      digitalBs: dBs,
+      efectivoBs: eBs,
+      divisasUsd: dUsd,
+      totalConsolidadoUsd: totUsd,
+      totalConsolidadoBs: totBs,
     };
   }, [saldosIniciales, movimientosHistoricos, movimientos, transferencias, tasaActual]);
 
@@ -420,13 +428,16 @@ export const BalanceView: React.FC<Props> = ({
         }
       }
 
+      const bUSD = ingUSD - gasUSD;
+      const bBs = ingBs - gasBs;
+
       return {
         totalIngresosUSD: ingUSD,
         totalGastosUSD: gasUSD,
-        balanceNetoUSD: ingUSD - gasUSD,
+        balanceNetoUSD: Math.abs(bUSD) < 0.005 || Object.is(bUSD, -0) ? 0 : bUSD,
         totalIngresosBs: ingBs,
         totalGastosBs: gasBs,
-        balanceNetoBs: ingBs - gasBs,
+        balanceNetoBs: Math.abs(bBs) < 0.005 || Object.is(bBs, -0) ? 0 : bBs,
       };
     }, [movimientosSemanaFiltrados]);
 
@@ -880,12 +891,17 @@ export const BalanceView: React.FC<Props> = ({
     csv += `"Puesto de Venta:","${nombreFiltroPuesto}"\n`;
     csv += `"Tasa Oficial BCV:","${tasaActual} Bs/$"\n\n`;
 
+    const gUSD = ingUSD - gasUSD - retUSD;
+    const gBs = ingBs - gasBs - retBs;
+    const gananciaNetaUSD = Math.abs(gUSD) < 0.005 || Object.is(gUSD, -0) ? 0 : gUSD;
+    const gananciaNetaBs = Math.abs(gBs) < 0.005 || Object.is(gBs, -0) ? 0 : gBs;
+
     csv += `"RESUMEN DEL MES (${mesTxt})"\n`;
     csv += `"Concepto","Monto ($ USD)","Monto (Bs)"\n`;
     csv += `"Total Ingresos","${ingUSD.toFixed(2)}","${ingBs.toFixed(2)}"\n`;
     csv += `"Gastos Operativos (Negocio)","${gasUSD.toFixed(2)}","${gasBs.toFixed(2)}"\n`;
     csv += `"Retiros Personales","${retUSD.toFixed(2)}","${retBs.toFixed(2)}"\n`;
-    csv += `"Ganancia Neta","${(ingUSD - gasUSD - retUSD).toFixed(2)}","${(ingBs - gasBs - retBs).toFixed(2)}"\n\n`;
+    csv += `"Ganancia Neta","${gananciaNetaUSD.toFixed(2)}","${gananciaNetaBs.toFixed(2)}"\n\n`;
 
     csv += `"RESUMEN ANUAL (${anoSel}) — ENERO A DICIEMBRE"\n`;
     csv += `"Mes","Ingresos ($)","Gastos Operativos ($)","Retiros Personales ($)","Balance Neto ($)"\n`;

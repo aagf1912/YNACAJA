@@ -34,7 +34,6 @@ export const App: React.FC = () => {
   const [cargandoAuth, setCargandoAuth] = useState<boolean>(true);
   const [cargandoDatos, setCargandoDatos] = useState<boolean>(false);
   const [modalPuestosAbierto, setModalPuestosAbierto] = useState<boolean>(false);
-  const [sincronizandoBCV, setSincronizandoBCV] = useState<boolean>(false);
   const [toastTasa, setToastTasa] = useState<string | null>(null);
 
   // 1. Cargar Sesión y Perfil
@@ -276,24 +275,6 @@ export const App: React.FC = () => {
     setTasaDia(nuevaTasa);
   };
 
-  // Sincronización manual bajo demanda desde el botón "↻ BCV"
-  const handleSincronizarBCV = async () => {
-    if (sincronizandoBCV) return;
-    setSincronizandoBCV(true);
-    try {
-      const nuevaTasa = await obtenerTasaBCVOficial();
-      if (nuevaTasa > 0) {
-        await handleActualizarTasa(nuevaTasa);
-        setToastTasa(`✓ Tasa BCV actualizada a ${nuevaTasa} Bs/$`);
-        setTimeout(() => setToastTasa(null), 3500);
-      }
-    } catch (err: any) {
-      alert(err?.message || 'Error al obtener la tasa oficial del BCV.');
-    } finally {
-      setSincronizandoBCV(false);
-    }
-  };
-
   // Manejo de inserción de movimientos
   const handleGuardarMovimientos = async (
     movs: Omit<Movimiento, 'id' | 'created_at'>[]
@@ -372,8 +353,6 @@ export const App: React.FC = () => {
       <Header
         tasaDia={tasaDia}
         onActualizarTasa={handleActualizarTasa}
-        onSincronizarBCV={handleSincronizarBCV}
-        sincronizandoBCV={sincronizandoBCV}
         perfil={perfil}
         onCerrarSesion={handleCerrarSesion}
         onAbrirGestionPuestos={() => setModalPuestosAbierto(true)}
