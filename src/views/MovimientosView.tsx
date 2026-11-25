@@ -681,8 +681,8 @@ export const MovimientosView: React.FC<Props> = ({
                           </div>
 
                           {/* Línea 2: Badge naturaleza + Badge Pago Mixto + metadatos + Editar/Eliminar/Chevron */}
-                          <div className="flex items-center justify-between gap-2 mt-1.5">
-                            <div className="flex items-center gap-1.5 min-w-0 flex-1 flex-wrap">
+                          <div className="flex items-start justify-between gap-2 mt-1.5">
+                            <div className="flex items-center gap-x-1.5 gap-y-1 min-w-0 flex-1 flex-wrap">
                               <BadgeNaturaleza
                                 naturaleza={mixto.naturaleza}
                                 tipo="gasto"
@@ -691,10 +691,14 @@ export const MovimientosView: React.FC<Props> = ({
                               <span className="text-[10px] font-bold text-[#2C474E] bg-zinc-100 border border-zinc-200 px-1.5 py-0.5 rounded shrink-0">
                                 Pago Mixto
                               </span>
-                              <span className="text-[11px] text-zinc-500 truncate">
-                                {mixto.categoria}
+                              <span className="text-[11px] text-zinc-500 leading-snug">
+                                {String(mixto.categoria) === 'Personal / Entretenimiento / Ocio'
+                                  ? 'Personal / Ocio'
+                                  : mixto.categoria}
                                 {mixto.puestoNombre ? ` · ${mixto.puestoNombre}` : ''}
-                                {` · Tasa ${formatNumber(mixto.tasaAplicada)}`}
+                              </span>
+                              <span className="text-[11px] text-zinc-500 whitespace-nowrap leading-snug">
+                                {`· Tasa ${formatNumber(mixto.tasaAplicada)}`}
                               </span>
                             </div>
 
@@ -816,18 +820,26 @@ export const MovimientosView: React.FC<Props> = ({
                       </div>
 
                       {/* Línea 2: Badge suave + metadatos separados por puntos · + Íconos discretos a la derecha */}
-                      <div className="flex items-center justify-between gap-2 mt-1.5">
-                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2 mt-1.5">
+                        <div className="flex items-center gap-x-1.5 gap-y-1 min-w-0 flex-1 flex-wrap">
                           <BadgeNaturaleza
                             naturaleza={item.naturaleza}
                             tipo={item.tipo}
                             className="shrink-0"
                           />
-                          <span className="text-[11px] text-zinc-500 truncate">
+                          <span className="text-[11px] text-zinc-500 leading-snug">
                             {metodoLabel}
-                            {item.categoria ? ` · ${item.categoria}` : ''}
+                            {item.categoria
+                              ? ` · ${
+                                  String(item.categoria) === 'Personal / Entretenimiento / Ocio'
+                                    ? 'Personal / Ocio'
+                                    : item.categoria
+                                }`
+                              : ''}
                             {nombrePuesto ? ` · ${nombrePuesto}` : ''}
-                            {` · Tasa ${formatNumber(tasaItem)}`}
+                          </span>
+                          <span className="text-[11px] text-zinc-500 whitespace-nowrap leading-snug">
+                            {`· Tasa ${formatNumber(tasaItem)}`}
                           </span>
                         </div>
 

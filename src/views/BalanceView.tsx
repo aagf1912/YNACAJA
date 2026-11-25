@@ -1263,7 +1263,7 @@ export const BalanceView: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* 2. TABLA PROTAGONISTA: COMISIÓN VENDEDORES POR PUESTO (bordes suaves y aire) */}
+        {/* 2. COMISIÓN VENDEDORES POR PUESTO (Tarjetas compactas apiladas 100% responsive) */}
         <div className="bg-white border border-zinc-200/80 rounded-2xl overflow-hidden shadow-xs">
           <div className="bg-[#1E3A3A] text-white px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1274,140 +1274,167 @@ export const BalanceView: React.FC<Props> = ({
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left">
-              <thead>
-                <tr className="bg-zinc-50/80 border-b border-zinc-100 text-zinc-500 font-semibold">
-                  <th className="py-3 px-3.5">Puesto</th>
-                  <th className="py-3 px-2.5 text-center">Cant.</th>
-                  <th className="py-3 px-3.5 text-right">Ventas</th>
-                  <th className="py-3 px-3.5 text-right text-[#047857]">Comisión</th>
-                  <th className="py-3 px-3.5 text-right text-[#1E3A3A]">Neto</th>
-                  <th className="py-3 px-3.5 text-right">Liquidación</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100">
-                {resumenPorPuesto.items.map((p) => {
-                  return (
-                    <tr key={p.id} className="hover:bg-zinc-50/70 transition-colors">
-                      <td className="py-3 px-3.5 font-bold text-[#18181B]">
-                        {p.nombre}
-                        {p.porcentaje > 0 && (
-                          <span className="ml-1.5 text-[10px] text-zinc-400 font-normal">
-                            ({p.porcentaje}%)
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3 px-2.5 text-center tabular-nums text-zinc-500">
-                        {p.ventasCount}
-                      </td>
-                      <td className="py-3 px-3.5 text-right tabular-nums font-bold text-[#18181B]">
-                        {formatUSD(p.totalUSD)}
-                      </td>
-                      <td className="py-3 px-3.5 text-right tabular-nums font-bold text-[#047857]">
-                        <div>({formatUSD(p.comisionUSD)})</div>
-                        {p.yaPagadoUsd > 0 && (
-                          <div className="text-[10px] text-[#166534] font-normal">
-                            Pagado: {formatUSD(p.yaPagadoUsd)}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3 px-3.5 text-right tabular-nums font-black text-[#1E3A3A]">
-                        {formatUSD(p.netoUSD)}
-                      </td>
-                      <td className="py-3 px-3.5 text-right">
-                        {p.pendienteUsd === 0 && p.comisionUSD > 0 ? (
-                          <div className="inline-flex items-center gap-1.5 justify-end">
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#ECFDF5] text-[#166534] border border-emerald-200/70">
-                              <CheckCircle2 size={12} />
-                              <span>Pagado</span>
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleAbrirModalPago(p, true)}
-                              disabled={liquidandoPuestoId === p.id}
-                              className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-[#1E3A3A] bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
-                              title="Registrar pago anticipado / adelanto"
-                            >
-                              + Adelanto
-                            </button>
-                          </div>
-                        ) : p.pendienteUsd > 0 && p.id !== 'sin-puesto' ? (
-                          <div className="inline-flex items-center gap-1.5 justify-end">
-                            <button
-                              type="button"
-                              onClick={() => handleAbrirModalPago(p, false)}
-                              disabled={liquidandoPuestoId === p.id}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#166534] hover:bg-[#14532d] text-white shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
-                            >
-                              {liquidandoPuestoId === p.id ? (
-                                <>
-                                  <Loader2 size={12} className="animate-spin text-white" />
-                                  <span>Pagando...</span>
-                                </>
-                              ) : (
-                                <>
-                                  <CheckCircle2 size={12} className="text-[#86EFAC]" />
-                                  <span>
-                                    {p.yaPagadoUsd > 0
-                                      ? `Saldo (${formatUSD(p.pendienteUsd)})`
-                                      : `Pagar (${formatUSD(p.pendienteUsd)})`}
-                                  </span>
-                                </>
-                              )}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleAbrirModalPago(p, true)}
-                              disabled={liquidandoPuestoId === p.id}
-                              className="px-2 py-1.5 rounded-lg text-[11px] font-semibold text-[#1E3A3A] bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
-                              title="Registrar monto diferente o adelanto"
-                            >
-                              + Adelanto
-                            </button>
-                          </div>
-                        ) : p.id !== 'sin-puesto' ? (
-                          <button
-                            type="button"
-                            onClick={() => handleAbrirModalPago(p, true)}
-                            disabled={liquidandoPuestoId === p.id}
-                            className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-[#1E3A3A] bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
-                            title="Registrar adelanto de comisión"
-                          >
-                            + Adelanto
-                          </button>
-                        ) : (
-                          <span className="text-zinc-300 text-xs">-</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="bg-zinc-50 font-bold border-t border-zinc-200 text-[#18181B]">
-                  <td className="py-3 px-3.5">TOTAL PUESTOS</td>
-                  <td className="py-3 px-2.5 text-center tabular-nums text-zinc-500">
-                    {resumenPorPuesto.items.reduce((acc, i) => acc + i.ventasCount, 0)}
-                  </td>
-                  <td className="py-3 px-3.5 text-right tabular-nums text-[#18181B]">
-                    {formatUSD(resumenPorPuesto.totalVentas)}
-                  </td>
-                  <td className="py-3 px-3.5 text-right tabular-nums text-[#047857]">
-                    <div>({formatUSD(resumenPorPuesto.totalComision)})</div>
-                    {resumenPorPuesto.totalYaPagado > 0 && (
-                      <div className="text-[10px] text-[#166534] font-normal">
-                        Pagado: {formatUSD(resumenPorPuesto.totalYaPagado)}
-                      </div>
+          <div className="p-3 space-y-2.5">
+            {resumenPorPuesto.items.map((p) => (
+              <div
+                key={p.id}
+                className="border border-zinc-200/80 rounded-xl p-3 bg-white hover:bg-zinc-50/60 transition-colors space-y-2.5"
+              >
+                {/* Fila superior: Nombre + badge % a la izquierda, botón completo de acción a la derecha */}
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-xs sm:text-sm font-bold text-[#18181B] truncate">
+                      {p.nombre}
+                    </span>
+                    {p.porcentaje > 0 && (
+                      <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200/70 px-1.5 py-0.5 rounded-md shrink-0">
+                        {p.porcentaje}%
+                      </span>
                     )}
-                  </td>
-                  <td className="py-3 px-3.5 text-right tabular-nums text-[#1E3A3A]">
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {p.pendienteUsd === 0 && p.comisionUSD > 0 ? (
+                      <>
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#ECFDF5] text-[#166534] border border-emerald-200/70">
+                          <CheckCircle2 size={12} />
+                          <span>Saldado</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleAbrirModalPago(p, true)}
+                          disabled={liquidandoPuestoId === p.id}
+                          className="px-2 py-1 rounded-lg text-[11px] font-semibold text-[#1E3A3A] bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
+                          title="Registrar pago anticipado / adelanto"
+                        >
+                          + Adelanto
+                        </button>
+                      </>
+                    ) : p.pendienteUsd > 0 && p.id !== 'sin-puesto' ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleAbrirModalPago(p, false)}
+                          disabled={liquidandoPuestoId === p.id}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-bold bg-[#166534] hover:bg-[#14532d] text-white shadow-xs transition-colors disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                        >
+                          {liquidandoPuestoId === p.id ? (
+                            <>
+                              <Loader2 size={12} className="animate-spin text-white" />
+                              <span>Pagando...</span>
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle2 size={12} className="text-[#86EFAC]" />
+                              <span>
+                                {p.yaPagadoUsd > 0
+                                  ? `Saldo (${formatUSD(p.pendienteUsd)})`
+                                  : `Pagar (${formatUSD(p.pendienteUsd)})`}
+                              </span>
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAbrirModalPago(p, true)}
+                          disabled={liquidandoPuestoId === p.id}
+                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold text-[#1E3A3A] bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer whitespace-nowrap"
+                          title="Registrar monto diferente o adelanto"
+                        >
+                          + Adelanto
+                        </button>
+                      </>
+                    ) : p.id !== 'sin-puesto' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleAbrirModalPago(p, true)}
+                        disabled={liquidandoPuestoId === p.id}
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-[#1E3A3A] bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
+                        title="Registrar adelanto de comisión"
+                      >
+                        + Adelanto
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                {/* Fila inferior: Grilla de 4 columnas iguales */}
+                <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-zinc-100 text-center">
+                  <div className="bg-zinc-50/80 rounded-lg py-1.5 px-1">
+                    <span className="block text-[10px] text-zinc-400 font-medium">Cant.</span>
+                    <span className="block text-xs font-bold text-zinc-700 tabular-nums mt-0.5">
+                      {p.ventasCount}
+                    </span>
+                  </div>
+                  <div className="bg-zinc-50/80 rounded-lg py-1.5 px-1">
+                    <span className="block text-[10px] text-zinc-400 font-medium">Ventas</span>
+                    <span className="block text-xs font-bold text-[#18181B] tabular-nums mt-0.5">
+                      {formatUSD(p.totalUSD)}
+                    </span>
+                  </div>
+                  <div className="bg-emerald-50/50 rounded-lg py-1.5 px-1">
+                    <span className="block text-[10px] text-[#047857] font-medium">Comisión</span>
+                    <span className="block text-xs font-bold text-[#047857] tabular-nums mt-0.5">
+                      ({formatUSD(p.comisionUSD)})
+                    </span>
+                    {p.yaPagadoUsd > 0 && (
+                      <span className="block text-[9px] text-[#166534] font-semibold tabular-nums leading-tight mt-0.5">
+                        Pagado: {formatUSD(p.yaPagadoUsd)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="bg-zinc-50/80 rounded-lg py-1.5 px-1">
+                    <span className="block text-[10px] text-[#1E3A3A] font-medium">Neto</span>
+                    <span className="block text-xs font-black text-[#1E3A3A] tabular-nums mt-0.5">
+                      {formatUSD(p.netoUSD)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {/* Tarjeta de resumen TOTAL */}
+            <div className="border border-zinc-200 bg-zinc-50 rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-[#18181B] uppercase tracking-wide">
+                  TOTAL
+                </span>
+                <span className="text-[10px] font-semibold text-zinc-500">
+                  Todos los puestos
+                </span>
+              </div>
+              <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-zinc-200/70 text-center">
+                <div className="bg-white rounded-lg py-1.5 px-1 border border-zinc-200/60">
+                  <span className="block text-[10px] text-zinc-400 font-medium">Cant.</span>
+                  <span className="block text-xs font-bold text-zinc-700 tabular-nums mt-0.5">
+                    {resumenPorPuesto.items.reduce((acc, i) => acc + i.ventasCount, 0)}
+                  </span>
+                </div>
+                <div className="bg-white rounded-lg py-1.5 px-1 border border-zinc-200/60">
+                  <span className="block text-[10px] text-zinc-400 font-medium">Ventas</span>
+                  <span className="block text-xs font-bold text-[#18181B] tabular-nums mt-0.5">
+                    {formatUSD(resumenPorPuesto.totalVentas)}
+                  </span>
+                </div>
+                <div className="bg-white rounded-lg py-1.5 px-1 border border-emerald-200/60">
+                  <span className="block text-[10px] text-[#047857] font-medium">Comisión</span>
+                  <span className="block text-xs font-bold text-[#047857] tabular-nums mt-0.5">
+                    ({formatUSD(resumenPorPuesto.totalComision)})
+                  </span>
+                  {resumenPorPuesto.totalYaPagado > 0 && (
+                    <span className="block text-[9px] text-[#166534] font-semibold tabular-nums leading-tight mt-0.5">
+                      Pagado: {formatUSD(resumenPorPuesto.totalYaPagado)}
+                    </span>
+                  )}
+                </div>
+                <div className="bg-white rounded-lg py-1.5 px-1 border border-zinc-200/60">
+                  <span className="block text-[10px] text-[#1E3A3A] font-medium">Neto</span>
+                  <span className="block text-xs font-black text-[#1E3A3A] tabular-nums mt-0.5">
                     {formatUSD(resumenPorPuesto.totalNeto)}
-                  </td>
-                  <td className="py-3 px-3.5"></td>
-                </tr>
-              </tfoot>
-            </table>
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1490,76 +1517,89 @@ export const BalanceView: React.FC<Props> = ({
           </button>
 
           {detalleDiarioAbierto && (
-            <div className="overflow-x-auto border-t border-zinc-100">
-              <table className="w-full text-xs text-left">
+            <div className="border-t border-zinc-100">
+              <table className="w-full table-fixed text-xs text-left">
                 <thead>
                   <tr className="bg-zinc-50/80 border-b border-zinc-100 text-zinc-500 font-semibold">
-                    <th className="py-2.5 px-3 sticky left-0 bg-zinc-50/80 z-10 border-r border-zinc-100">
-                      Día
-                    </th>
-                    <th className="py-2.5 px-2.5 text-right">Ingresos (Bs)</th>
-                    <th className="py-2.5 px-2.5 text-right text-[#166534]">Ingresos ($)</th>
-                    <th className="py-2.5 px-2.5 text-right">Gastos (Bs)</th>
-                    <th className="py-2.5 px-2.5 text-right text-[#991B1B]">Gastos ($)</th>
-                    <th className="py-2.5 px-3 text-right font-bold">Balance ($)</th>
+                    <th className="py-2.5 px-2.5 w-[22%]">Día</th>
+                    <th className="py-2.5 px-2 text-right text-[#166534] w-[26%]">Ingresos</th>
+                    <th className="py-2.5 px-2 text-right text-[#991B1B] w-[26%]">Gastos</th>
+                    <th className="py-2.5 px-2.5 text-right font-bold w-[26%]">Neto</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
-                  {detalleDiario.map((d) => (
-                    <tr key={d.fecha} className="hover:bg-zinc-50/60 transition-colors">
-                      <td className="py-2.5 px-3 font-semibold sticky left-0 bg-white z-10 border-r border-zinc-100 whitespace-nowrap">
-                        {d.dia}{' '}
-                        <span className="text-[10px] font-normal text-zinc-400">
-                          ({d.fecha.slice(5)})
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right tabular-nums text-zinc-500">
-                        {formatNumber(d.ingresosBs)}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right tabular-nums font-bold text-[#166534]">
-                        {formatUSD(d.ingresosUSD)}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right tabular-nums text-zinc-500">
-                        {formatNumber(d.gastosBs)}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right tabular-nums font-bold text-[#991B1B]">
-                        {formatUSD(d.gastosUSD)}
-                      </td>
-                      <td
-                        className={`py-2.5 px-3 text-right tabular-nums font-bold ${
-                          d.balanceUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
-                        }`}
-                      >
-                        {d.balanceUSD >= 0 ? '+' : ''}
-                        {formatUSD(d.balanceUSD)}
-                      </td>
-                    </tr>
-                  ))}
+                  {detalleDiario.map((d) => {
+                    const netoBs = d.ingresosBs - d.gastosBs;
+                    return (
+                      <tr key={d.fecha} className="hover:bg-zinc-50/60 transition-colors">
+                        <td className="py-2.5 px-2.5 font-semibold text-[#18181B]">
+                          <span className="block truncate">{d.dia}</span>
+                          <span className="block text-[10px] font-normal text-slate-400">
+                            {d.fecha.slice(5)}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-2 text-right tabular-nums">
+                          <div className="font-bold text-[#166534]">
+                            {formatUSD(d.ingresosUSD)}
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {formatNumber(d.ingresosBs)} Bs
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-2 text-right tabular-nums">
+                          <div className="font-bold text-[#991B1B]">
+                            {formatUSD(d.gastosUSD)}
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {formatNumber(d.gastosBs)} Bs
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-2.5 text-right tabular-nums">
+                          <div
+                            className={`font-bold ${
+                              d.balanceUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
+                            }`}
+                          >
+                            {d.balanceUSD >= 0 ? '+' : ''}
+                            {formatUSD(d.balanceUSD)}
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {netoBs >= 0 ? '+' : ''}
+                            {formatNumber(netoBs)} Bs
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
                 <tfoot>
                   <tr className="bg-zinc-50 font-bold border-t border-zinc-200 text-[#18181B]">
-                    <td className="py-2.5 px-3 sticky left-0 bg-zinc-50 z-10 border-r border-zinc-100">
-                      TOTAL
+                    <td className="py-2.5 px-2.5">TOTAL</td>
+                    <td className="py-2.5 px-2 text-right tabular-nums">
+                      <div className="text-[#166534]">{formatUSD(totalIngresosUSD)}</div>
+                      <div className="text-[10px] text-slate-400 font-normal truncate">
+                        {formatNumber(totalIngresosBs)} Bs
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-2 text-right tabular-nums">
+                      <div className="text-[#991B1B]">{formatUSD(totalGastosUSD)}</div>
+                      <div className="text-[10px] text-slate-400 font-normal truncate">
+                        {formatNumber(totalGastosBs)} Bs
+                      </div>
                     </td>
                     <td className="py-2.5 px-2.5 text-right tabular-nums">
-                      {formatNumber(totalIngresosBs)}
-                    </td>
-                    <td className="py-2.5 px-2.5 text-right tabular-nums text-[#166534]">
-                      {formatUSD(totalIngresosUSD)}
-                    </td>
-                    <td className="py-2.5 px-2.5 text-right tabular-nums">
-                      {formatNumber(totalGastosBs)}
-                    </td>
-                    <td className="py-2.5 px-2.5 text-right tabular-nums text-[#991B1B]">
-                      {formatUSD(totalGastosUSD)}
-                    </td>
-                    <td
-                      className={`py-2.5 px-3 text-right tabular-nums font-black ${
-                        balanceNetoUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
-                      }`}
-                    >
-                      {balanceNetoUSD >= 0 ? '+' : ''}
-                      {formatUSD(balanceNetoUSD)}
+                      <div
+                        className={`font-black ${
+                          balanceNetoUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
+                        }`}
+                      >
+                        {balanceNetoUSD >= 0 ? '+' : ''}
+                        {formatUSD(balanceNetoUSD)}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-normal truncate">
+                        {totalIngresosBs - totalGastosBs >= 0 ? '+' : ''}
+                        {formatNumber(totalIngresosBs - totalGastosBs)} Bs
+                      </div>
                     </td>
                   </tr>
                 </tfoot>
@@ -1603,61 +1643,52 @@ export const BalanceView: React.FC<Props> = ({
                   No hay gastos registrados en esta semana.
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-left">
-                    <thead>
-                      <tr className="bg-zinc-50/80 border-b border-zinc-100 text-zinc-500 font-semibold">
-                        <th className="py-2.5 px-3 sticky left-0 bg-zinc-50/80 z-10 border-r border-zinc-100">
-                          Categoría
-                        </th>
-                        <th className="py-2.5 px-2.5 text-center">Naturaleza</th>
-                        <th className="py-2.5 px-2.5 text-right">Total Bs</th>
-                        <th className="py-2.5 px-3 text-right text-[#991B1B]">Total ($)</th>
-                        <th className="py-2.5 px-2.5 text-right">%</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-100">
-                      {categoriasVisibles.map((c) => {
-                        const pct = totalGastosUSD > 0 ? (c.totalUSD / totalGastosUSD) * 100 : 0;
-                        return (
-                          <tr key={c.categoria} className="hover:bg-zinc-50/60 transition-colors">
-                            <td className="py-2.5 px-3 font-semibold text-[#18181B] sticky left-0 bg-white z-10 border-r border-zinc-100 whitespace-nowrap">
-                              {c.categoria}
-                            </td>
-                            <td className="py-2.5 px-2.5 text-center">
-                              <BadgeNaturaleza naturaleza={c.naturaleza} tipo="gasto" />
-                            </td>
-                            <td className="py-2.5 px-2.5 text-right tabular-nums text-zinc-600">
-                              {formatNumber(c.totalBs)}
-                            </td>
-                            <td className="py-2.5 px-3 text-right tabular-nums font-bold text-[#991B1B]">
-                              {formatUSD(c.totalUSD)}
-                            </td>
-                            <td className="py-2.5 px-2.5 text-right tabular-nums text-zinc-500">
-                              {formatPorcentaje(pct)}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot>
-                      <tr className="bg-zinc-50 font-bold border-t border-zinc-200 text-[#18181B]">
-                        <td className="py-2.5 px-3 sticky left-0 bg-zinc-50 z-10 border-r border-zinc-100">
-                          TOTAL
-                        </td>
-                        <td className="py-2.5 px-2.5 text-center text-[10px] text-zinc-400">
-                          {totalGastosItemsCount} movs
-                        </td>
-                        <td className="py-2.5 px-2.5 text-right tabular-nums">
-                          {formatNumber(totalGastosBs)}
-                        </td>
-                        <td className="py-2.5 px-3 text-right tabular-nums text-[#991B1B]">
-                          {formatUSD(totalGastosUSD)}
-                        </td>
-                        <td className="py-2.5 px-2.5 text-right tabular-nums">100.0%</td>
-                      </tr>
-                    </tfoot>
-                  </table>
+                <div className="divide-y divide-zinc-100">
+                  {categoriasVisibles.map((c) => {
+                    const pct = totalGastosUSD > 0 ? (c.totalUSD / totalGastosUSD) * 100 : 0;
+                    return (
+                      <div
+                        key={c.categoria}
+                        className="px-4 py-3 flex justify-between items-center gap-3 hover:bg-zinc-50/60 transition-colors"
+                      >
+                        <div className="min-w-0 flex-1 flex flex-col items-start gap-1">
+                          <span className="text-xs sm:text-sm font-semibold text-[#18181B] leading-snug">
+                            {c.categoria}
+                          </span>
+                          <BadgeNaturaleza naturaleza={c.naturaleza} tipo="gasto" />
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-xs sm:text-sm font-bold text-[#991B1B] tabular-nums">
+                            {formatUSD(c.totalUSD)}{' '}
+                            <span className="text-[11px] font-semibold text-zinc-400">
+                              ({formatPorcentaje(pct)})
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-zinc-500 tabular-nums mt-0.5">
+                            {formatNumber(c.totalBs)} Bs
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <div className="px-4 py-3 bg-zinc-50 flex justify-between items-center gap-3 border-t border-zinc-200">
+                    <div>
+                      <span className="text-xs font-black text-[#18181B] uppercase">TOTAL</span>
+                      <span className="block text-[10px] text-zinc-400 font-medium">
+                        {totalGastosItemsCount} movs
+                      </span>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-xs sm:text-sm font-black text-[#991B1B] tabular-nums">
+                        {formatUSD(totalGastosUSD)}{' '}
+                        <span className="text-[11px] font-semibold text-zinc-500">(100.0%)</span>
+                      </div>
+                      <div className="text-[11px] font-semibold text-zinc-600 tabular-nums mt-0.5">
+                        {formatNumber(totalGastosBs)} Bs
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

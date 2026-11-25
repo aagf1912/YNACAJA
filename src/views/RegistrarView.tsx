@@ -819,17 +819,15 @@ export const RegistrarView: React.FC<Props> = ({
           ) : (
             /* Modo Pago Simple: 1 input con conversión en vivo */
             <div>
-              <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
                 <label className="text-xs font-semibold text-[#18181B]">
-                  {esDolar ? 'Monto en Divisas ($ USD)' : 'Monto en Bolívares (Bs)'}
+                  {esDolar ? 'Monto en Divisas ($)' : 'Monto en Bolívares (Bs)'}
                 </label>
-                {montoNumerico > 0 && (
-                  <span className="text-[11px] font-semibold text-[#1E3A3A] tabular-nums bg-emerald-50 border border-emerald-200/70 px-2.5 py-0.5 rounded-full">
-                    {esDolar
-                      ? `≈ Bs. ${formatNumber(montoEquivalente)}`
-                      : `≈ $ ${formatNumber(montoEquivalente)}`}
-                  </span>
-                )}
+                <span className="text-[11px] font-semibold text-[#1E3A3A] tabular-nums bg-emerald-50 border border-emerald-200/70 px-2.5 py-0.5 rounded-full whitespace-nowrap">
+                  {esDolar
+                    ? `≈ Bs. ${formatNumber(montoEquivalente)}`
+                    : `≈ $${formatNumber(montoEquivalente)} USD`}
+                </span>
               </div>
 
               <div className="relative">
