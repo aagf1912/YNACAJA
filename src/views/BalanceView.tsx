@@ -33,12 +33,12 @@ import {
 import { toPng } from 'html-to-image';
 import { Share } from '@capacitor/share';
 import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Movimiento, Puesto, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento, LiquidacionSemanal, SaldosInicialesCaja, TransferenciaCaja } from '../types';
+import { Movimiento, Puesto, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento, SaldosInicialesCaja, TransferenciaCaja } from '../types';
 import { calcularMontos, formatNumber, formatPorcentaje, formatUSD, formatVES } from '../utils/format';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
 import { getSemanaLunesSabado, shiftSemana } from '../utils/dateUtils';
 import { getVenezuelaDate } from '../utils/parserLocal';
-import { getLiquidacionesSemanales, registrarLiquidacionSemanal, insertMovimientos } from '../services/supabase';
+import { insertMovimientos } from '../services/supabase';
 import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
 import { CajaDisponibleCard } from '../components/CajaDisponibleCard';
 import { ModalSaldoInicial } from '../components/ModalSaldoInicial';
@@ -309,40 +309,7 @@ export const BalanceView: React.FC<Props> = ({
 
   // Fecha base para la semana (por defecto hoy)
   const [fechaSemana, setFechaSemana] = useState<Date>(() => new Date());
-  const [liquidaciones, setLiquidaciones] = useState<LiquidacionSemanal[]>([]);
   const [liquidandoPuestoId, setLiquidandoPuestoId] = useState<string | null>(null);
-
-  // Cargar liquidaciones semanales via fetch directo
-  const cargarLiquidaciones = useCallback(async () => {
-    try {
-      const token = getAccessTokenFromStorage() || supabaseAnonKey;
-      const res = await fetch(`${supabaseUrl}/rest/v1/liquidaciones_semanales?select=*`, {
-        method: 'GET',
-        headers: {
-          apikey: supabaseAnonKey,
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          const limpios = data.filter(
-            (l: any) => !(l.fecha_pago === '2026-11-25' && Number(l.monto_usd) === 1)
-          );
-          setLiquidaciones(limpios);
-          return;
-        }
-      }
-      const data = await getLiquidacionesSemanales();
-      setLiquidaciones(data);
-    } catch (err) {
-      console.warn('Error cargando liquidaciones en BalanceView:', err);
-    }
-  }, []);
-
-  useEffect(() => {
-    cargarLiquidaciones();
-  }, [cargarLiquidaciones]);
 
   // Calcula lunes a sábado de la semana seleccionada (estricto 6 días)
   const infoSemana = useMemo(() => {
@@ -351,6 +318,16 @@ export const BalanceView: React.FC<Props> = ({
 
   const { dias: diasSemana, rangoTexto } = infoSemana;
 
+  // Domingo de la semana seleccionada (para incluir pagos/adelantos de comisiones hechos en domingo)
+  const fechaDomingoSemana = useMemo(() => {
+    const [y, m, d] = infoSemana.semanaInicio.split('-').map(Number);
+    const dtDom = new Date(y, m - 1, d + 6, 12, 0, 0);
+    const yD = dtDom.getFullYear();
+    const mD = String(dtDom.getMonth() + 1).padStart(2, '0');
+    const dD = String(dtDom.getDate()).padStart(2, '0');
+    return `${yD}-${mD}-${dD}`;
+  }, [infoSemana.semanaInicio]);
+
   // Todos los movimientos dentro de la semana (Lunes a Sábado)
   const movimientosSemana = useMemo(() => {
     const base = movimientosHistoricos.length > 0 ? movimientosHistoricos : movimientos;
@@ -358,6 +335,18 @@ export const BalanceView: React.FC<Props> = ({
       (m) => m.fecha >= infoSemana.semanaInicio && m.fecha <= infoSemana.semanaFin
     );
   }, [movimientosHistoricos, movimientos, infoSemana.semanaInicio, infoSemana.semanaFin]);
+
+  // Movimientos de pago/adelanto de comisiones dentro de la semana completa (Lunes a Domingo)
+  const movimientosComisionSemana = useMemo(() => {
+    const base = movimientosHistoricos.length > 0 ? movimientosHistoricos : movimientos;
+    return base.filter(
+      (m) =>
+        m.fecha >= infoSemana.semanaInicio &&
+        m.fecha <= fechaDomingoSemana &&
+        m.tipo === 'gasto' &&
+        (m.categoria === 'Sueldos / Comisiones' || m.categoria === 'Nómina / Sueldos')
+    );
+  }, [movimientosHistoricos, movimientos, infoSemana.semanaInicio, fechaDomingoSemana]);
 
   // Estado para el modal de pago de comisiones
   interface ModalPagarComisionData {
@@ -403,7 +392,7 @@ export const BalanceView: React.FC<Props> = ({
     });
   };
 
-  // Confirmar y registrar pago de comisión llamando via fetch POST a rpc/liquidar_comision_semanal
+  // Confirmar y registrar pago o adelanto de comisión únicamente en public.movimientos
   const handleConfirmarPago = async () => {
     if (!pagoModalData || liquidandoPuestoId) return;
 
@@ -419,49 +408,43 @@ export const BalanceView: React.FC<Props> = ({
       return;
     }
 
-    const { puestoId, totalVentasUSD, comisionPorcentaje } = pagoModalData;
+    const { puestoId, puestoNombre, comisionUSD } = pagoModalData;
     const fechaHoyVzla = getVenezuelaDate();
-    const token = getAccessTokenFromStorage() || supabaseAnonKey;
+    const fechaPago =
+      fechaHoyVzla >= infoSemana.semanaInicio && fechaHoyVzla <= fechaDomingoSemana
+        ? fechaHoyVzla
+        : infoSemana.semanaFin;
+    const montoBsCalculado = Math.round(montoUSDNum * tasaNum * 100) / 100;
+    const esPagoTotal = comisionUSD > 0 && montoUSDNum >= comisionUSD - 0.01;
+    const descPago = esPagoTotal
+      ? `Liquidación Comisión ${puestoNombre} (${infoSemana.rangoTexto})`
+      : `Adelanto Comisión ${puestoNombre}`;
 
     setLiquidandoPuestoId(puestoId);
     try {
-      const res = await fetch(`${supabaseUrl}/rest/v1/rpc/liquidar_comision_semanal`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: supabaseAnonKey,
-          Authorization: `Bearer ${token}`,
+      await insertMovimientos([
+        {
+          fecha: fechaPago,
+          descripcion: descPago,
+          tipo: 'gasto',
+          naturaleza: 'Negocio',
+          categoria: 'Sueldos / Comisiones',
+          metodo_pago: metodoPagoComision,
+          moneda_original: 'VES',
+          moneda: 'VES',
+          monto_original: montoBsCalculado,
+          tasa_aplicada: tasaNum,
+          tasa: tasaNum,
+          monto_bs: montoBsCalculado,
+          monto_usd: montoUSDNum,
+          puesto_id: puestoId,
         },
-        body: JSON.stringify({
-          p_puesto_id: puestoId,
-          p_semana_inicio: infoSemana.semanaInicio,
-          p_semana_fin: infoSemana.semanaFin,
-          p_total_ventas_usd: totalVentasUSD,
-          p_comision_porcentaje: comisionPorcentaje,
-          p_monto_comision_usd: montoUSDNum,
-          p_tasa_pago: tasaNum,
-          p_metodo_pago: metodoPagoComision,
-          p_fecha_pago: fechaHoyVzla,
-        }),
-      });
-
-      if (!res.ok) {
-        let errMsg = 'Error al liquidar comisión';
-        try {
-          const errData = await res.json();
-          errMsg = errData?.message || errData?.error_description || errMsg;
-        } catch {
-          const text = await res.text();
-          if (text) errMsg = text;
-        }
-        throw new Error(errMsg);
-      }
+      ]);
 
       // Cerrar modal
       setPagoModalData(null);
 
-      // Recargar liquidaciones_semanales y movimientos para actualizar inmediatamente la interfaz
-      await cargarLiquidaciones();
+      // Recargar movimientos para actualizar inmediatamente la interfaz
       await cargarDatosCajaYMovimientos();
       if (onRecargarDatos) {
         await onRecargarDatos();
@@ -555,13 +538,8 @@ export const BalanceView: React.FC<Props> = ({
       const comisionUSD = Math.round(((totalUSD * pct) / 100) * 100) / 100;
       const netoUSD = Math.round((totalUSD - comisionUSD) * 100) / 100;
 
-      // Pagos de comisión y adelantos registrados en movimientos de la semana (fuente unificada)
-      const pagosMovsPuesto = movimientosSemana.filter(
-        (m) =>
-          m.puesto_id === p.id &&
-          m.tipo === 'gasto' &&
-          (m.categoria === 'Sueldos / Comisiones' || m.categoria === 'Nómina / Sueldos')
-      );
+      // Pagos de comisión y adelantos registrados exclusivamente en public.movimientos
+      const pagosMovsPuesto = movimientosComisionSemana.filter((m) => m.puesto_id === p.id);
 
       let yaPagadoUsd = 0;
       let yaPagadoBs = 0;
@@ -569,21 +547,6 @@ export const BalanceView: React.FC<Props> = ({
         const { monto_usd, monto_bs } = calcularMontos(m);
         yaPagadoUsd += monto_usd;
         yaPagadoBs += monto_bs;
-      }
-
-      // Si no hay movimientos pero existen liquidaciones en la tabla auxiliar
-      // (excluyendo el registro huérfano de prueba del 25/11 por $1.00)
-      if (pagosMovsPuesto.length === 0) {
-        const liqsPuesto = liquidaciones.filter(
-          (l) =>
-            l.puesto_id === p.id &&
-            l.semana_inicio === infoSemana.semanaInicio &&
-            !(l.fecha_pago === '2026-11-25' && Number(l.monto_usd) === 1)
-        );
-        for (const l of liqsPuesto) {
-          yaPagadoUsd += Number(l.monto_comision_usd ?? l.monto_usd ?? 0);
-          yaPagadoBs += Number((l as any).monto_pagado_bs ?? l.monto_bs ?? 0);
-        }
       }
       yaPagadoUsd = Math.round(yaPagadoUsd * 100) / 100;
       yaPagadoBs = Math.round(yaPagadoBs * 100) / 100;
@@ -646,7 +609,7 @@ export const BalanceView: React.FC<Props> = ({
       totalYaPagado,
       totalPendiente,
     };
-  }, [puestos, movimientosSemana, liquidaciones, infoSemana.semanaInicio]);
+  }, [puestos, movimientosSemana, movimientosComisionSemana]);
 
   // 3. Resumen de Ingresos por Método de Pago (reconociendo variantes de nombres)
   const ingresosPorMetodo = useMemo(() => {
@@ -1327,9 +1290,7 @@ export const BalanceView: React.FC<Props> = ({
                             <>
                               <CheckCircle2 size={12} className="text-[#86EFAC]" />
                               <span>
-                                {p.yaPagadoUsd > 0
-                                  ? `Saldo (${formatUSD(p.pendienteUsd)})`
-                                  : `Pagar (${formatUSD(p.pendienteUsd)})`}
+                                {`Pagar (${formatUSD(p.pendienteUsd)})`}
                               </span>
                             </>
                           )}
@@ -1384,7 +1345,7 @@ export const BalanceView: React.FC<Props> = ({
                     )}
                   </div>
                   <div className="bg-zinc-50/80 rounded-lg py-1.5 px-1">
-                    <span className="block text-[10px] text-[#1E3A3A] font-medium">Neto</span>
+                    <span className="block text-[10px] text-[#1E3A3A] font-medium leading-tight">Neto Negocio</span>
                     <span className="block text-xs font-black text-[#1E3A3A] tabular-nums mt-0.5">
                       {formatUSD(p.netoUSD)}
                     </span>
@@ -1428,7 +1389,7 @@ export const BalanceView: React.FC<Props> = ({
                   )}
                 </div>
                 <div className="bg-white rounded-lg py-1.5 px-1 border border-zinc-200/60">
-                  <span className="block text-[10px] text-[#1E3A3A] font-medium">Neto</span>
+                  <span className="block text-[10px] text-[#1E3A3A] font-medium leading-tight">Neto Negocio</span>
                   <span className="block text-xs font-black text-[#1E3A3A] tabular-nums mt-0.5">
                     {formatUSD(resumenPorPuesto.totalNeto)}
                   </span>
