@@ -385,6 +385,7 @@ export const App: React.FC = () => {
                 onGuardarMovimientos={handleGuardarMovimientos}
                 onActualizarMovimiento={handleActualizarMovimiento}
                 onEliminarMovimiento={handleEliminarMovimiento}
+                onRecargarDatos={cargarDatos}
               />
             )}
 

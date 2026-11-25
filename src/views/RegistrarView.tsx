@@ -15,6 +15,7 @@ import {
   Pencil,
   Trash2,
   Tag,
+  Layers,
 } from 'lucide-react';
 import {
   CategoriaMovimiento,
@@ -30,6 +31,7 @@ import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
 import { formatMontoMovimiento, formatNumber } from '../utils/format';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { ModalMovimiento } from '../components/ModalMovimiento';
+import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
 
 interface Props {
   tasaDia: number;
@@ -37,9 +39,11 @@ interface Props {
   onGuardarMovimientos: (movs: Omit<Movimiento, 'id' | 'created_at'>[]) => Promise<Movimiento[]>;
   onActualizarMovimiento: (mov: Movimiento) => Promise<void>;
   onEliminarMovimiento: (id: string) => Promise<void>;
+  onRecargarDatos?: () => Promise<void>;
 }
 
 type ModoRegistro = 'gastos' | 'personal' | 'ventas';
+type MetodoPagoFormulario = MetodoPago | 'pago_mixto';
 
 export const RegistrarView: React.FC<Props> = ({
   tasaDia,
@@ -47,13 +51,17 @@ export const RegistrarView: React.FC<Props> = ({
   onGuardarMovimientos,
   onActualizarMovimiento,
   onEliminarMovimiento,
+  onRecargarDatos,
 }) => {
   // Estado del formulario
   const [modo, setModo] = useState<ModoRegistro>('gastos');
   const [puestoId, setPuestoId] = useState<string>('');
   const [fecha, setFecha] = useState<string>(getVenezuelaDate());
-  const [metodoPago, setMetodoPago] = useState<MetodoPago>('pago_movil');
+  const [metodoPago, setMetodoPago] = useState<MetodoPagoFormulario>('pago_movil');
   const [monto, setMonto] = useState<string>('');
+  const [montoBancoBs, setMontoBancoBs] = useState<string>('');
+  const [montoEfectivoBs, setMontoEfectivoBs] = useState<string>('');
+  const [montoDivisasUsd, setMontoDivisasUsd] = useState<string>('');
   const [descripcion, setDescripcion] = useState<string>('');
   const [categoriaGasto, setCategoriaGasto] = useState<CategoriaMovimiento>('Materia Prima');
 
@@ -76,7 +84,7 @@ export const RegistrarView: React.FC<Props> = ({
     ventas: ['Venta del día', 'Venta especial evento', 'Venta mayor'],
   };
 
-  // Cálculo en vivo de conversión
+  // Cálculo en vivo de conversión para Pago Simple
   const montoNumerico = parseFloat(monto.replace(',', '.')) || 0;
   const esDolar = metodoPago === 'divisa';
   const tasaSegura = tasaDia > 0 ? tasaDia : 100;
@@ -84,43 +92,210 @@ export const RegistrarView: React.FC<Props> = ({
     ? montoNumerico * tasaSegura
     : (tasaSegura > 0 ? montoNumerico / tasaSegura : 0);
 
+  // Cálculos en vivo para Pago Mixto
+  const numBancoBs = parseFloat(montoBancoBs.replace(',', '.')) || 0;
+  const numEfectivoBs = parseFloat(montoEfectivoBs.replace(',', '.')) || 0;
+  const numDivisasUsd = parseFloat(montoDivisasUsd.replace(',', '.')) || 0;
+  const totalMixtoBs = numBancoBs + numEfectivoBs + (numDivisasUsd * tasaSegura);
+  const totalMixtoUsd = tasaSegura > 0 ? totalMixtoBs / tasaSegura : 0;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMensaje(null);
     setExitoMensaje(null);
-
-    const mNum = parseFloat(monto.replace(',', '.'));
-    if (isNaN(mNum) || mNum <= 0) {
-      setErrorMensaje('Por favor ingresa un monto válido mayor a 0.');
-      return;
-    }
 
     if (!descripcion.trim()) {
       setErrorMensaje('Por favor escribe el concepto o descripción del movimiento.');
       return;
     }
 
+    let tipoMov: TipoMovimiento = 'gasto';
+    let natMov: NaturalezaMovimiento = 'Negocio';
+    let catMov: CategoriaMovimiento = categoriaGasto;
+
+    if (modo === 'ventas') {
+      tipoMov = 'venta';
+      natMov = 'Ventas';
+      catMov = 'Ventas';
+    } else if (modo === 'personal') {
+      tipoMov = 'gasto';
+      natMov = 'Personal';
+      catMov = 'Personal / Ocio / Regalos';
+    } else {
+      tipoMov = 'gasto';
+      natMov = 'Negocio';
+      catMov = categoriaGasto || 'Materia Prima';
+    }
+
+    // =========================================================================
+    // FLUJO 1: PAGO MIXTO (Solo Gastos o Personal)
+    // =========================================================================
+    if (metodoPago === 'pago_mixto' && (modo === 'gastos' || modo === 'personal')) {
+      const numBanco = parseFloat(montoBancoBs.replace(',', '.')) || 0;
+      const numEfectivo = parseFloat(montoEfectivoBs.replace(',', '.')) || 0;
+      const numDivisas = parseFloat(montoDivisasUsd.replace(',', '.')) || 0;
+
+      const camposConMonto = (numBanco > 0 ? 1 : 0) + (numEfectivo > 0 ? 1 : 0) + (numDivisas > 0 ? 1 : 0);
+      if (camposConMonto === 0 || (numBanco <= 0 && numEfectivo <= 0 && numDivisas <= 0)) {
+        setErrorMensaje('Por favor ingresa un monto válido mayor a 0 en al menos uno de los bolsillos.');
+        return;
+      }
+
+      setGuardando(true);
+
+      const descConSufijo = descripcion.trim().toLowerCase().includes('pago mixto')
+        ? descripcion.trim()
+        : `${descripcion.trim()} (Pago Mixto)`;
+
+      const itemsAInsertar: any[] = [];
+
+      if (numBanco > 0) {
+        const mBs = Math.round(numBanco * 100) / 100;
+        const mUsd = Math.round((numBanco / tasaSegura) * 100) / 100;
+        itemsAInsertar.push({
+          fecha,
+          descripcion: descConSufijo,
+          tipo: 'gasto',
+          naturaleza: natMov,
+          categoria: catMov,
+          metodo_pago: 'pago_movil',
+          moneda_original: 'VES',
+          moneda: 'VES',
+          monto_original: mBs,
+          monto_bs: mBs,
+          monto_usd: mUsd,
+          tasa_aplicada: tasaSegura,
+          tasa: tasaSegura,
+          puesto_id: puestoId || null,
+        });
+      }
+
+      if (numEfectivo > 0) {
+        const mBs = Math.round(numEfectivo * 100) / 100;
+        const mUsd = Math.round((numEfectivo / tasaSegura) * 100) / 100;
+        itemsAInsertar.push({
+          fecha,
+          descripcion: descConSufijo,
+          tipo: 'gasto',
+          naturaleza: natMov,
+          categoria: catMov,
+          metodo_pago: 'efectivo_bs',
+          moneda_original: 'VES',
+          moneda: 'VES',
+          monto_original: mBs,
+          monto_bs: mBs,
+          monto_usd: mUsd,
+          tasa_aplicada: tasaSegura,
+          tasa: tasaSegura,
+          puesto_id: puestoId || null,
+        });
+      }
+
+      if (numDivisas > 0) {
+        const mUsd = Math.round(numDivisas * 100) / 100;
+        const mBs = Math.round(numDivisas * tasaSegura * 100) / 100;
+        itemsAInsertar.push({
+          fecha,
+          descripcion: descConSufijo,
+          tipo: 'gasto',
+          naturaleza: natMov,
+          categoria: catMov,
+          metodo_pago: 'divisa',
+          moneda_original: 'USD',
+          moneda: 'USD',
+          monto_original: mUsd,
+          monto_bs: mBs,
+          monto_usd: mUsd,
+          tasa_aplicada: tasaSegura,
+          tasa: tasaSegura,
+          puesto_id: puestoId || null,
+        });
+      }
+
+      try {
+        const token = getAccessTokenFromStorage() || supabaseAnonKey;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+        let guardados: Movimiento[] = [];
+
+        try {
+          const dbPayload = itemsAInsertar.map((item) => ({
+            id: crypto.randomUUID ? crypto.randomUUID() : `mov_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            ...item,
+          }));
+
+          const res = await fetch(`${supabaseUrl}/rest/v1/movimientos`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: supabaseAnonKey,
+              Authorization: `Bearer ${token}`,
+              Prefer: 'return=representation',
+            },
+            body: JSON.stringify(dbPayload),
+            signal: controller.signal,
+          });
+
+          if (!res.ok) {
+            let errMsg = `Error ${res.status}`;
+            try {
+              const errJson = await res.json();
+              errMsg = errJson?.message || errJson?.error || errMsg;
+            } catch {
+              const txt = await res.text();
+              if (txt) errMsg = txt;
+            }
+            throw new Error(errMsg);
+          }
+
+          const data = await res.json();
+          guardados = Array.isArray(data) && data.length > 0 ? data : dbPayload;
+        } catch (fetchErr: any) {
+          console.warn('Direct fetch fallo o abortado, aplicando fallback onGuardarMovimientos:', fetchErr);
+          guardados = await onGuardarMovimientos(itemsAInsertar);
+        } finally {
+          clearTimeout(timeoutId);
+        }
+
+        if (guardados && guardados.length > 0) {
+          setMovimientosSesion((prev) => [...guardados, ...prev]);
+          if (onRecargarDatos) {
+            onRecargarDatos().catch(() => {});
+          }
+        }
+
+        // Limpiar campos de pago mixto
+        setMontoBancoBs('');
+        setMontoEfectivoBs('');
+        setMontoDivisasUsd('');
+        setDescripcion('');
+
+        const totUsd = numDivisas + (numBanco + numEfectivo) / tasaSegura;
+        const totBs = numBanco + numEfectivo + (numDivisas * tasaSegura);
+        setExitoMensaje(
+          `✓ Guardado con éxito pago mixto: $${formatNumber(totUsd)} USD (≈ Bs. ${formatNumber(totBs)}) distribuido en ${itemsAInsertar.length} bolsillo(s).`
+        );
+      } catch (err: any) {
+        setErrorMensaje(err?.message || 'Error al guardar el pago mixto. Inténtalo nuevamente.');
+      } finally {
+        setGuardando(false);
+      }
+      return;
+    }
+
+    // =========================================================================
+    // FLUJO 2: PAGO SIMPLE
+    // =========================================================================
+    const mNum = parseFloat(monto.replace(',', '.'));
+    if (isNaN(mNum) || mNum <= 0) {
+      setErrorMensaje('Por favor ingresa un monto válido mayor a 0.');
+      return;
+    }
+
     setGuardando(true);
 
     try {
-      let tipoMov: TipoMovimiento = 'gasto';
-      let natMov: NaturalezaMovimiento = 'Negocio';
-      let catMov: CategoriaMovimiento = categoriaGasto;
-
-      if (modo === 'ventas') {
-        tipoMov = 'venta';
-        natMov = 'Ventas';
-        catMov = 'Ventas';
-      } else if (modo === 'personal') {
-        tipoMov = 'gasto';
-        natMov = 'Personal';
-        catMov = 'Personal / Ocio / Regalos';
-      } else {
-        tipoMov = 'gasto';
-        natMov = 'Negocio';
-        catMov = categoriaGasto || 'Materia Prima';
-      }
-
       const montoBs = esDolar ? Math.round(mNum * tasaSegura * 100) / 100 : mNum;
       const montoUSD = esDolar ? mNum : Math.round((mNum / tasaSegura) * 100) / 100;
 
@@ -130,7 +305,7 @@ export const RegistrarView: React.FC<Props> = ({
         tipo: tipoMov,
         naturaleza: natMov,
         categoria: catMov,
-        metodo_pago: metodoPago,
+        metodo_pago: metodoPago as MetodoPago,
         moneda_original: esDolar ? 'USD' : 'VES',
         moneda: esDolar ? 'USD' : 'VES',
         monto_original: mNum,
@@ -146,6 +321,9 @@ export const RegistrarView: React.FC<Props> = ({
       if (guardados && guardados.length > 0) {
         setMovimientosSesion((prev) => [guardados[0], ...prev]);
         setExitoMensaje(`✓ Guardado con éxito: "${nuevoMov.descripcion}" (${formatMontoMovimiento(guardados[0])})`);
+        if (onRecargarDatos) {
+          onRecargarDatos().catch(() => {});
+        }
       } else {
         setExitoMensaje(`✓ Guardado con éxito: "${nuevoMov.descripcion}"`);
       }
@@ -243,6 +421,7 @@ export const RegistrarView: React.FC<Props> = ({
                 type="button"
                 onClick={() => {
                   setModo('ventas');
+                  if (metodoPago === 'pago_mixto') setMetodoPago('pago_movil');
                   setErrorMensaje(null);
                 }}
                 className={`min-h-[56px] flex flex-col items-center justify-center py-3 px-2 rounded-xl border text-center transition-all cursor-pointer ${
@@ -307,7 +486,11 @@ export const RegistrarView: React.FC<Props> = ({
             <label className="block text-xs font-semibold text-zinc-500 mb-2">
               Método de Pago
             </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <div
+              className={`grid gap-2.5 ${
+                modo === 'ventas' ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-5'
+              }`}
+            >
               {/* Pago Móvil */}
               <button
                 type="button"
@@ -363,6 +546,25 @@ export const RegistrarView: React.FC<Props> = ({
                 <DollarSign size={14} />
                 <span>Divisas ($)</span>
               </button>
+
+              {/* Pago Mixto (Solo disponible para Gastos y Personal) */}
+              {(modo === 'gastos' || modo === 'personal') && (
+                <button
+                  type="button"
+                  onClick={() => setMetodoPago('pago_mixto')}
+                  className={`col-span-2 sm:col-span-1 min-h-[44px] flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl border text-xs transition-all cursor-pointer ${
+                    metodoPago === 'pago_mixto'
+                      ? 'border-[#2C474E] bg-[#2C474E] text-white font-bold shadow-xs'
+                      : 'border-zinc-200/80 bg-white text-zinc-600 hover:bg-zinc-50 font-medium'
+                  }`}
+                >
+                  <Layers
+                    size={14}
+                    className={metodoPago === 'pago_mixto' ? 'text-[#86EFAC]' : 'text-zinc-500'}
+                  />
+                  <span>Pago Mixto</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -389,36 +591,137 @@ export const RegistrarView: React.FC<Props> = ({
             </div>
           )}
 
-          {/* 5. Input de Monto con Conversión en Vivo */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-semibold text-[#18181B]">
-                {esDolar ? 'Monto en Divisas ($ USD)' : 'Monto en Bolívares (Bs)'}
-              </label>
-              {montoNumerico > 0 && (
-                <span className="text-[11px] font-semibold text-[#1E3A3A] tabular-nums bg-emerald-50 border border-emerald-200/70 px-2.5 py-0.5 rounded-full">
-                  {esDolar
-                    ? `≈ Bs. ${formatNumber(montoEquivalente)}`
-                    : `≈ $ ${formatNumber(montoEquivalente)}`}
+          {/* 5. Inputs de Monto */}
+          {metodoPago === 'pago_mixto' && (modo === 'gastos' || modo === 'personal') ? (
+            /* Modo Pago Mixto: 3 inputs (uno por bolsillo real) */
+            <div className="space-y-3 p-3.5 sm:p-4 bg-zinc-50/70 border border-zinc-200/90 rounded-2xl">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-[#18181B] flex items-center gap-1.5">
+                  <Layers size={14} className="text-[#2C474E]" />
+                  <span>Montos por Bolsillo (Pago Mixto)</span>
+                </label>
+                <span className="text-[11px] text-zinc-500 font-medium">
+                  Llena 2 o los 3 bolsillos
                 </span>
-              )}
-            </div>
+              </div>
 
-            <div className="relative">
-              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-zinc-400">
-                {esDolar ? '$' : 'Bs.'}
-              </span>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={monto}
-                onChange={(e) => setMonto(e.target.value)}
-                placeholder="0.00"
-                required
-                className="w-full min-h-[48px] pl-11 pr-3.5 py-3 text-base sm:text-lg font-bold border border-zinc-200 rounded-xl bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
-              />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* a) Banco / Pago Móvil (Bs) */}
+                <div className="bg-white p-2.5 rounded-xl border border-zinc-200 shadow-2xs">
+                  <label className="block text-[11px] font-bold text-zinc-600 mb-1 flex items-center gap-1">
+                    <Smartphone size={13} className="text-[#1E3A3A] shrink-0" />
+                    <span className="truncate">Banco / Pago Móvil (Bs)</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-zinc-400">
+                      Bs.
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={montoBancoBs}
+                      onChange={(e) => setMontoBancoBs(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full min-h-[42px] pl-9 pr-2.5 py-2 text-sm sm:text-base font-bold border border-zinc-200 rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
+                    />
+                  </div>
+                </div>
+
+                {/* b) Efectivo (Bs) */}
+                <div className="bg-white p-2.5 rounded-xl border border-zinc-200 shadow-2xs">
+                  <label className="block text-[11px] font-bold text-zinc-600 mb-1 flex items-center gap-1">
+                    <Banknote size={13} className="text-emerald-600 shrink-0" />
+                    <span className="truncate">Efectivo (Bs)</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-zinc-400">
+                      Bs.
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={montoEfectivoBs}
+                      onChange={(e) => setMontoEfectivoBs(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full min-h-[42px] pl-9 pr-2.5 py-2 text-sm sm:text-base font-bold border border-zinc-200 rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
+                    />
+                  </div>
+                </div>
+
+                {/* c) Divisas ($ USD) */}
+                <div className="bg-white p-2.5 rounded-xl border border-zinc-200 shadow-2xs">
+                  <label className="block text-[11px] font-bold text-zinc-600 mb-1 flex items-center gap-1">
+                    <DollarSign size={13} className="text-amber-600 shrink-0" />
+                    <span className="truncate">Divisas ($ USD)</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-zinc-400">
+                      $
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={montoDivisasUsd}
+                      onChange={(e) => setMontoDivisasUsd(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full min-h-[42px] pl-7 pr-2.5 py-2 text-sm sm:text-base font-bold border border-zinc-200 rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Resumen en vivo: Total del Gasto Combinado */}
+              <div className="bg-white border border-zinc-200 rounded-xl px-3.5 py-2.5 flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider block">
+                    Total del Gasto
+                  </span>
+                  <span className="text-[10px] text-zinc-400 font-medium">
+                    Tasa BCV: {formatNumber(tasaSegura)} Bs/$
+                  </span>
+                </div>
+                <div className="text-right">
+                  <div className="text-base sm:text-lg font-black text-[#1E3A3A] tabular-nums">
+                    ${formatNumber(totalMixtoUsd)} <span className="text-xs font-bold text-zinc-500">USD</span>
+                  </div>
+                  <div className="text-xs font-semibold text-zinc-500 tabular-nums">
+                    ≈ Bs. {formatNumber(totalMixtoBs)}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
+          ) : (
+            /* Modo Pago Simple: 1 input con conversión en vivo */
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-[#18181B]">
+                  {esDolar ? 'Monto en Divisas ($ USD)' : 'Monto en Bolívares (Bs)'}
+                </label>
+                {montoNumerico > 0 && (
+                  <span className="text-[11px] font-semibold text-[#1E3A3A] tabular-nums bg-emerald-50 border border-emerald-200/70 px-2.5 py-0.5 rounded-full">
+                    {esDolar
+                      ? `≈ Bs. ${formatNumber(montoEquivalente)}`
+                      : `≈ $ ${formatNumber(montoEquivalente)}`}
+                  </span>
+                )}
+              </div>
+
+              <div className="relative">
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-zinc-400">
+                  {esDolar ? '$' : 'Bs.'}
+                </span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={monto}
+                  onChange={(e) => setMonto(e.target.value)}
+                  placeholder="0.00"
+                  required
+                  className="w-full min-h-[48px] pl-11 pr-3.5 py-3 text-base sm:text-lg font-bold border border-zinc-200 rounded-xl bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
+                />
+              </div>
+            </div>
+          )}
 
           {/* 6. Input de Descripción / Concepto */}
           <div>
@@ -491,7 +794,9 @@ export const RegistrarView: React.FC<Props> = ({
               <>
                 <CheckCircle2 size={17} />
                 <span>
-                  {modo === 'ventas'
+                  {metodoPago === 'pago_mixto' && (modo === 'gastos' || modo === 'personal')
+                    ? 'Guardar Pago Mixto'
+                    : modo === 'ventas'
                     ? 'Guardar Venta'
                     : modo === 'personal'
                     ? 'Guardar Retiro Personal'
