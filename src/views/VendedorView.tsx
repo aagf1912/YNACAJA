@@ -3,6 +3,8 @@ import {
   Calendar,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Clock,
   TrendingUp,
   TrendingDown,
@@ -64,6 +66,20 @@ export const VendedorView: React.FC<Props> = ({
   };
   const labelHoy = useMemo(() => formatDiaMes(fechaHoyVzla), [fechaHoyVzla]);
   const labelAyer = useMemo(() => formatDiaMes(fechaAyerVzla), [fechaAyerVzla]);
+
+  // Información de la semana a la que pertenece HOY (Lunes a Sábado + Domingo)
+  const infoSemanaHoy = useMemo(() => {
+    return getSemanaLunesSabado(fechaHoyVzla);
+  }, [fechaHoyVzla]);
+
+  const fechaDomingoSemanaHoy = useMemo(() => {
+    const [y, m, d] = infoSemanaHoy.semanaInicio.split('-').map(Number);
+    const dtDom = new Date(y, m - 1, d + 6, 12, 0, 0);
+    const yD = dtDom.getFullYear();
+    const mD = String(dtDom.getMonth() + 1).padStart(2, '0');
+    const dD = String(dtDom.getDate()).padStart(2, '0');
+    return `${yD}-${mD}-${dD}`;
+  }, [infoSemanaHoy.semanaInicio]);
 
   // Selección de fecha en Cierre de Caja: 'hoy' o 'ayer' (plazo de 1 día)
   const [diaSeleccionado, setDiaSeleccionado] = useState<'hoy' | 'ayer'>('hoy');
@@ -189,7 +205,63 @@ export const VendedorView: React.FC<Props> = ({
     cargarLiquidaciones();
   }, [cargarLiquidaciones]);
 
-  // Suscripción en tiempo real a liquidaciones y movimientos
+  // Movimientos de adelantos / pagos recibidos (Sueldos y Comisiones del puesto)
+  const [adelantosMovimientos, setAdelantosMovimientos] = useState<Movimiento[]>([]);
+  const [desplegarAdelantos, setDesplegarAdelantos] = useState<boolean>(false);
+  const [cargandoAdelantos, setCargandoAdelantos] = useState<boolean>(false);
+
+  // Cargar adelantos y pagos de comisiones del puesto para la semana activa vía fetch directo con AbortController (8s)
+  const cargarAdelantos = useCallback(async () => {
+    if (!perfil.puesto_id) return;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      setCargandoAdelantos(true);
+      const token = getAccessTokenFromStorage() || supabaseAnonKey;
+      const fInicio = infoSemanaHoy.semanaInicio;
+      const fFin = fechaDomingoSemanaHoy;
+
+      const url = `${supabaseUrl}/rest/v1/movimientos?puesto_id=eq.${perfil.puesto_id}&tipo=eq.gasto&fecha=gte.${fInicio}&fecha=lte.${fFin}&select=*&order=fecha.desc,created_at.desc`;
+
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+        },
+        signal: controller.signal,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          // Filtrar estrictamente solo Sueldos / Comisiones asignados a este puesto
+          // Ocultando cualquier otro gasto o retiro del negocio por privacidad del administrador
+          const filtrados = data.filter(
+            (item: any) =>
+              item.puesto_id === perfil.puesto_id &&
+              item.tipo === 'gasto' &&
+              (item.categoria === 'Sueldos / Comisiones' || item.categoria === 'Nómina / Sueldos')
+          );
+          setAdelantosMovimientos(filtrados);
+        }
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.warn('Error cargando adelantos del vendedor:', err);
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      setCargandoAdelantos(false);
+    }
+  }, [perfil.puesto_id, infoSemanaHoy.semanaInicio, fechaDomingoSemanaHoy]);
+
+  useEffect(() => {
+    cargarAdelantos();
+  }, [cargarAdelantos]);
+
+  // Suscripción en tiempo real a liquidaciones y movimientos del puesto
   useEffect(() => {
     const client = supabase;
     if (!client || !perfil.puesto_id) return;
@@ -208,17 +280,24 @@ export const VendedorView: React.FC<Props> = ({
           cargarLiquidaciones();
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'movimientos',
+          filter: `puesto_id=eq.${perfil.puesto_id}`,
+        },
+        () => {
+          cargarAdelantos();
+        }
+      )
       .subscribe();
 
     return () => {
       client.removeChannel(channel);
     };
-  }, [perfil.puesto_id, cargarLiquidaciones]);
-
-  // Información de la semana a la que pertenece HOY
-  const infoSemanaHoy = useMemo(() => {
-    return getSemanaLunesSabado(fechaHoyVzla);
-  }, [fechaHoyVzla]);
+  }, [perfil.puesto_id, cargarLiquidaciones, cargarAdelantos]);
 
   // Cargar en el formulario los registros del día seleccionado (Hoy o Ayer) mediante fetch directo
   const cargarCierre = useCallback(async (fechaACargar: string) => {
@@ -394,9 +473,10 @@ export const VendedorView: React.FC<Props> = ({
         setMensajeExito(null);
       }, 4000);
 
-      // Recargar los datos del cierre y el estado de liquidaciones
+      // Recargar los datos del cierre, estado de liquidaciones y adelantos
       await cargarCierre(fechaSeleccionada);
       await cargarLiquidaciones();
+      await cargarAdelantos();
     } catch (err: any) {
       console.error('Error al guardar cierre de caja:', err);
       if (err.name === 'AbortError') {
@@ -507,6 +587,113 @@ export const VendedorView: React.FC<Props> = ({
       mejorDiaIndex: maxComisionUSD > 0 ? mejorIdx : -1,
     };
   }, [datos6DiasGanancias]);
+
+  // Helpers para formato de fecha y método en la lista desplegable de adelantos
+  const formatFechaCorta = (fechaStr: string) => {
+    if (!fechaStr) return '';
+    try {
+      const [y, m, d] = fechaStr.split('-').map(Number);
+      const dt = new Date(y, m - 1, d, 12, 0, 0);
+      const dias = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+      const meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+      return `${dias[dt.getDay()]} ${d} ${meses[dt.getMonth()]}`;
+    } catch {
+      return fechaStr;
+    }
+  };
+
+  const getMetodoPagoLabel = (metodo?: string) => {
+    if (!metodo) return 'Efectivo';
+    const m = metodo.toLowerCase();
+    if (m === 'pago_movil' || m.includes('pago')) return 'Pago Móvil';
+    if (m === 'efectivo_bs' || (m.includes('efectivo') && !m.includes('divisa'))) return 'Efectivo Bs';
+    if (m === 'punto_venta' || m.includes('punto')) return 'Punto de Venta';
+    if (m === 'divisa' || m.includes('divisa') || m.includes('dolar') || m.includes('usd')) return 'Divisas ($)';
+    return metodo;
+  };
+
+  // Ventas de la semana activa para el puesto del vendedor
+  const ventasSemanaActiva = useMemo(() => {
+    return movimientos.filter((m) => {
+      const esPuesto = !perfil.puesto_id || m.puesto_id === perfil.puesto_id;
+      const esVenta = m.tipo === 'venta' || m.tipo === 'ingreso';
+      const enRango =
+        m.fecha >= infoSemanaHoy.semanaInicio && m.fecha <= fechaDomingoSemanaHoy;
+      return esPuesto && esVenta && enRango;
+    });
+  }, [movimientos, perfil.puesto_id, infoSemanaHoy.semanaInicio, fechaDomingoSemanaHoy]);
+
+  // 1. Comisión Generada (22%) del período actual (USD y Bs)
+  const { totalVentasSemanaUSD, totalVentasSemanaBs, comisionGeneradaUSD, comisionGeneradaBs } = useMemo(() => {
+    let vUSD = 0;
+    let vBs = 0;
+    const tasaActual = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
+
+    for (const m of ventasSemanaActiva) {
+      const tasaM = Number(m.tasa_aplicada ?? m.tasa ?? tasaActual) || 1;
+      const orig = Number(m.monto_original) || 0;
+      if (m.moneda_original === 'USD' || m.moneda === 'USD') {
+        vUSD += orig;
+        vBs += orig * tasaM;
+      } else {
+        vBs += orig;
+        vUSD += tasaM > 0 ? orig / tasaM : 0;
+      }
+    }
+
+    const comUSD = Math.round(((vUSD * comisionPorcentaje) / 100) * 100) / 100;
+    const comBs = Math.round((comUSD * tasaActual) * 100) / 100;
+
+    return {
+      totalVentasSemanaUSD: vUSD,
+      totalVentasSemanaBs: vBs,
+      comisionGeneradaUSD: comUSD,
+      comisionGeneradaBs: comBs,
+    };
+  }, [ventasSemanaActiva, tasaEfectiva, tasaDia, comisionPorcentaje]);
+
+  // 2. Adelantos / Pagos Recibidos en el período actual
+  const { totalAdelantosUSD, totalAdelantosBs, adelantosOrdenados } = useMemo(() => {
+    let sumUSD = 0;
+    let sumBs = 0;
+    const tasaActual = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
+
+    const items = adelantosMovimientos.map((m) => {
+      const tasaM = Number(m.tasa_aplicada ?? m.tasa ?? tasaActual) || 1;
+      const orig = Number(m.monto_original) || 0;
+      let mUSD = 0;
+      let mBs = 0;
+
+      if (m.moneda_original === 'USD' || m.moneda === 'USD') {
+        mUSD = orig;
+        mBs = orig * tasaM;
+      } else {
+        mBs = orig;
+        mUSD = tasaM > 0 ? orig / tasaM : 0;
+      }
+
+      sumUSD += mUSD;
+      sumBs += mBs;
+
+      return {
+        ...m,
+        montoCalculadoUSD: mUSD,
+        montoCalculadoBs: mBs,
+        tasaUsada: tasaM,
+      };
+    });
+
+    return {
+      totalAdelantosUSD: Math.round(sumUSD * 100) / 100,
+      totalAdelantosBs: Math.round(sumBs * 100) / 100,
+      adelantosOrdenados: items,
+    };
+  }, [adelantosMovimientos, tasaEfectiva, tasaDia]);
+
+  // 3. Saldo Pendiente por Cobrar: Comisión Generada - Adelantos Recibidos
+  const saldoPendienteUSD = Math.round((comisionGeneradaUSD - totalAdelantosUSD) * 100) / 100;
+  const saldoPendienteBs = Math.round((comisionGeneradaBs - totalAdelantosBs) * 100) / 100;
+  const tieneSaldoAFavor = saldoPendienteUSD >= -0.005;
 
   // Saldo pendiente por cobrar en la semana
   const pendienteSemanaUSD = useMemo(() => {
@@ -799,6 +986,151 @@ export const VendedorView: React.FC<Props> = ({
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* TARJETA RESUMEN: MI COMISIÓN Y ADELANTOS */}
+          <div className="bg-white border border-[#E4E4E7] rounded-xl p-4 sm:p-5 shadow-xs space-y-3.5">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200/60 flex items-center justify-center text-emerald-700">
+                  <Receipt size={17} />
+                </div>
+                <div>
+                  <h2 className="text-xs sm:text-sm font-bold text-[#18181B] tracking-tight">
+                    Mi Comisión y Adelantos
+                  </h2>
+                  <span className="text-[11px] text-zinc-500 font-medium">
+                    Semana activa: {infoSemanaHoy.rangoTexto}
+                  </span>
+                </div>
+              </div>
+
+              <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200/70 font-mono">
+                {comisionPorcentaje}% Comisión
+              </span>
+            </div>
+
+            {/* 3 Bloques Principales */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Bloque 1: Comisión Generada */}
+              <div className="bg-[#FAFAFA] border border-zinc-200/80 rounded-xl p-3">
+                <span className="text-[11px] font-semibold text-zinc-600 block mb-1">
+                  Comisión Generada ({comisionPorcentaje}%):
+                </span>
+                <div className="text-xl sm:text-2xl font-black tabular-nums text-[#1E3A3A] font-mono">
+                  {formatUSD(comisionGeneradaUSD)}
+                </div>
+                <div className="text-xs font-semibold text-zinc-500 tabular-nums mt-0.5 font-mono">
+                  ≈ {formatVES(comisionGeneradaBs)}
+                </div>
+                <span className="text-[10px] text-zinc-400 mt-1 block">
+                  Ventas período: {formatUSD(totalVentasSemanaUSD)}
+                </span>
+              </div>
+
+              {/* Bloque 2: Adelantos / Pagos Recibidos */}
+              <div className="bg-[#FAFAFA] border border-zinc-200/80 rounded-xl p-3 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-zinc-600 block mb-1">
+                      Adelantos Recibidos:
+                    </span>
+                    {adelantosOrdenados.length > 0 && (
+                      <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-zinc-200 text-zinc-700">
+                        {adelantosOrdenados.length}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xl sm:text-2xl font-black tabular-nums text-[#0D9488] font-mono">
+                    {formatUSD(totalAdelantosUSD)}
+                  </div>
+                  <div className="text-xs font-semibold text-zinc-500 tabular-nums mt-0.5 font-mono">
+                    ≈ {formatVES(totalAdelantosBs)}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setDesplegarAdelantos((prev) => !prev)}
+                  className="mt-2 text-[11px] font-semibold text-[#0D9488] hover:text-[#0f766e] flex items-center gap-1 transition-colors cursor-pointer self-start"
+                >
+                  <span>{desplegarAdelantos ? 'Ocultar detalle' : 'Ver detalle'}</span>
+                  {desplegarAdelantos ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+              </div>
+
+              {/* Bloque 3: Saldo Pendiente por Cobrar */}
+              <div
+                className={`rounded-xl p-3 border ${
+                  tieneSaldoAFavor
+                    ? 'bg-[#ECFDF5] border-[#A7F3D0] text-[#065F46]'
+                    : 'bg-[#FEF2F2] border-[#FECACA] text-[#991B1B]'
+                }`}
+              >
+                <span className="text-[11px] font-bold block mb-1">
+                  {tieneSaldoAFavor ? 'Saldo Pendiente por Cobrar:' : 'Adelanto Excedente:'}
+                </span>
+                <div className="text-xl sm:text-2xl font-black tabular-nums font-mono">
+                  {tieneSaldoAFavor ? formatUSD(saldoPendienteUSD) : `-${formatUSD(Math.abs(saldoPendienteUSD))}`}
+                </div>
+                <div className="text-xs font-semibold tabular-nums mt-0.5 font-mono opacity-90">
+                  ≈ {tieneSaldoAFavor ? formatVES(saldoPendienteBs) : `-${formatVES(Math.abs(saldoPendienteBs))}`}
+                </div>
+                <span className="text-[10px] mt-1 block font-medium opacity-80">
+                  {tieneSaldoAFavor ? '✓ Saldo a favor por cobrar' : '⚠ Excedente a descontar'}
+                </span>
+              </div>
+            </div>
+
+            {/* Detalle Desplegable de Adelantos y Pagos */}
+            {desplegarAdelantos && (
+              <div className="pt-2 border-t border-zinc-100 space-y-2">
+                <span className="text-[11px] font-bold text-zinc-700 block">
+                  Detalle de Adelantos y Pagos Recibidos:
+                </span>
+                {cargandoAdelantos ? (
+                  <div className="p-3 bg-zinc-50 rounded-lg text-center text-xs text-zinc-500 flex items-center justify-center gap-2">
+                    <Loader2 size={14} className="animate-spin text-zinc-400" />
+                    <span>Cargando adelantos...</span>
+                  </div>
+                ) : adelantosOrdenados.length === 0 ? (
+                  <div className="p-3 bg-zinc-50 rounded-lg text-center text-xs text-zinc-500">
+                    No tienes adelantos ni deducciones registradas en este período.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-zinc-100 bg-zinc-50 rounded-xl border border-zinc-200/80 overflow-hidden">
+                    {adelantosOrdenados.map((ad, idx) => (
+                      <div
+                        key={ad.id || `adelanto-${idx}`}
+                        className="p-2.5 sm:p-3 flex items-center justify-between gap-2 hover:bg-zinc-100/60 transition-colors"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-xs font-bold text-[#18181B] truncate">
+                              {ad.descripcion || 'Adelanto'}
+                            </span>
+                            <span className="text-[10px] text-zinc-600 bg-white px-1.5 py-0.5 rounded border border-zinc-200 font-medium">
+                              {getMetodoPagoLabel(ad.metodo_pago)}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-zinc-400 block mt-0.5">
+                            {formatFechaCorta(ad.fecha)}
+                          </span>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-xs sm:text-sm font-bold font-mono text-[#0D9488] tabular-nums">
+                            {formatUSD(ad.montoCalculadoUSD)}
+                          </div>
+                          <div className="text-[10px] font-semibold text-zinc-500 tabular-nums font-mono">
+                            {formatVES(ad.montoCalculadoBs)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* ESTADO DEL CIERRE: BLOQUEADO (AYER) O EDITABLE / GUARDABLE */}
