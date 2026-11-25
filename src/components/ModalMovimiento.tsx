@@ -121,9 +121,11 @@ export const ModalMovimiento: React.FC<Props> = ({
       setPuestoId(base.puesto_id || '');
       setFecha(base.fecha || hoyVzla);
       setMetodoPago('pago_mixto');
-      setCategoriaGasto(
-        base.categoria || (esPersonal ? 'Personal / Ocio / Regalos' : 'Materia Prima')
-      );
+      const catInicial =
+        (base.categoria as string) === 'Nómina / Sueldos'
+          ? 'Sueldos / Comisiones'
+          : base.categoria || (esPersonal ? 'Personal / Ocio / Regalos' : 'Materia Prima');
+      setCategoriaGasto(catInicial as CategoriaMovimiento);
       setDescripcion(
         (base.descripcion || '').replace(/\s*\(Pago Mixto\)\s*$/i, '').trim()
       );
@@ -179,10 +181,12 @@ export const ModalMovimiento: React.FC<Props> = ({
       setPuestoId(movimientoAEditar.puesto_id || '');
       setFecha(movimientoAEditar.fecha || hoyVzla);
       setMetodoPago(normalizarMetodoPago(movimientoAEditar.metodo_pago));
-      setCategoriaGasto(
-        movimientoAEditar.categoria ||
-          (esPersonal ? 'Personal / Ocio / Regalos' : 'Materia Prima')
-      );
+      const catAEditar =
+        (movimientoAEditar.categoria as string) === 'Nómina / Sueldos'
+          ? 'Sueldos / Comisiones'
+          : movimientoAEditar.categoria ||
+            (esPersonal ? 'Personal / Ocio / Regalos' : 'Materia Prima');
+      setCategoriaGasto(catAEditar as CategoriaMovimiento);
       setDescripcion(movimientoAEditar.descripcion || '');
       setMonto(
         movimientoAEditar.monto_original !== undefined &&
@@ -265,6 +269,7 @@ export const ModalMovimiento: React.FC<Props> = ({
       'Canela / Insumos',
       'Flete / Transporte',
       'Bolsas y empaques',
+      'Cuota negocio',
     ],
     personal: [
       'Retiro personal Ynaides',

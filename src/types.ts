@@ -13,6 +13,7 @@ export type CategoriaMovimiento =
   | 'Comidas y Bebidas'
   | 'Hielo y Varios Operativos'
   | 'Recargas y Servicios'
+  | 'Cuota Negocio'
   | 'Sueldos / Comisiones';
 
 export type MetodoPago = 'pago_movil' | 'punto_venta' | 'efectivo_bs' | 'divisa';
@@ -76,15 +77,15 @@ export interface ConfigNegocio {
 }
 
 export const CATEGORIAS_GASTO: { nombre: CategoriaMovimiento; naturaleza: NaturalezaMovimiento }[] = [
-  { nombre: 'Nómina / Sueldos', naturaleza: 'Negocio' },
   { nombre: 'Materia Prima', naturaleza: 'Negocio' },
-  { nombre: 'Personal / Ocio / Regalos', naturaleza: 'Personal' },
-  { nombre: 'Transporte y Logística', naturaleza: 'Negocio' },
-  { nombre: 'Insumos y Empaques', naturaleza: 'Negocio' },
-  { nombre: 'Comidas y Bebidas', naturaleza: 'Personal' },
   { nombre: 'Hielo y Varios Operativos', naturaleza: 'Negocio' },
+  { nombre: 'Insumos y Empaques', naturaleza: 'Negocio' },
+  { nombre: 'Transporte y Logística', naturaleza: 'Negocio' },
   { nombre: 'Recargas y Servicios', naturaleza: 'Negocio' },
+  { nombre: 'Cuota Negocio', naturaleza: 'Negocio' },
   { nombre: 'Sueldos / Comisiones', naturaleza: 'Negocio' },
+  { nombre: 'Personal / Ocio / Regalos', naturaleza: 'Personal' },
+  { nombre: 'Comidas y Bebidas', naturaleza: 'Personal' },
 ];
 
 export interface LiquidacionSemanal {

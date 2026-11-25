@@ -79,7 +79,7 @@ export const RegistrarView: React.FC<Props> = ({
 
   // Sugerencias rápidas de descripción según el tipo seleccionado
   const sugerencias = {
-    gastos: ['Hielo y vasos', 'Materia prima', 'Leche condensada', 'Canela / Insumos', 'Flete / Transporte', 'Bolsas y empaques'],
+    gastos: ['Hielo y vasos', 'Materia prima', 'Leche condensada', 'Canela / Insumos', 'Flete / Transporte', 'Bolsas y empaques', 'Cuota negocio'],
     personal: ['Retiro personal Ynaides', 'Almuerzo / Comida', 'Gasto personal', 'Ocio / Varios'],
     ventas: ['Venta del día', 'Venta especial evento', 'Venta mayor'],
   };

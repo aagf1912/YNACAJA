@@ -714,9 +714,14 @@ export const BalanceView: React.FC<Props> = ({
     for (const m of movimientosSemanaFiltrados) {
       if (m.tipo === 'gasto' || m.tipo === 'egreso') {
         const { monto_usd, monto_bs } = calcularMontos(m);
-        if (!mapa[m.categoria]) {
-          mapa[m.categoria] = {
-            categoria: m.categoria,
+        const catNombre =
+          (m.categoria as string) === 'Nómina / Sueldos'
+            ? 'Sueldos / Comisiones'
+            : (m.categoria || 'Hielo y Varios Operativos');
+
+        if (!mapa[catNombre]) {
+          mapa[catNombre] = {
+            categoria: catNombre as CategoriaMovimiento,
             naturaleza: m.naturaleza,
             pagoMovilBs: 0,
             efectivoBs: 0,
@@ -727,7 +732,7 @@ export const BalanceView: React.FC<Props> = ({
           };
         }
 
-        const reg = mapa[m.categoria];
+        const reg = mapa[catNombre];
         reg.itemsCount += 1;
         reg.totalBs += monto_bs;
         reg.totalUSD += monto_usd;
