@@ -15,7 +15,6 @@ import {
   Pencil,
   Trash2,
   Tag,
-  Clock,
 } from 'lucide-react';
 import {
   CategoriaMovimiento,
@@ -182,33 +181,23 @@ export const RegistrarView: React.FC<Props> = ({
   };
 
   return (
-    <div className="space-y-4 pb-20 pt-2 px-3 sm:px-4 max-w-2xl mx-auto">
-      {/* Encabezado */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-base font-bold text-[#18181B] tracking-tight">
-            Registrar Movimiento
-          </h1>
-          <p className="text-xs text-[#52525B]">
-            Carga rápida de ventas, gastos del negocio y retiros personales
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5 px-2.5 py-1 bg-white border border-[#E4E4E7] rounded text-xs text-[#2C474E] font-medium shadow-xs">
-          <Clock size={13} className="text-[#52525B]" />
-          <span>Tasa BCV:</span>
-          <span className="font-bold tabular-nums">{formatNumber(tasaDia)} Bs/$</span>
-        </div>
+    <div className="space-y-5 pb-24 pt-3 px-3.5 sm:px-4 max-w-2xl mx-auto">
+      {/* Encabezado limpio con aire */}
+      <div className="pt-1">
+        <h1 className="text-lg font-bold text-[#18181B] tracking-tight">
+          Registrar Movimiento
+        </h1>
       </div>
 
       {/* Tarjeta Principal del Formulario */}
-      <div className="bg-white border border-[#E4E4E7] rounded-xl p-4 sm:p-5 shadow-xs">
-        <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="bg-white border border-zinc-200/80 rounded-2xl p-4 sm:p-6 shadow-xs">
+        <form onSubmit={handleSubmit} className="space-y-5">
           {/* 1. Selector de Naturaleza / Tipo (Gastos, Personal, Ventas) */}
           <div>
-            <label className="block text-xs font-semibold text-[#52525B] mb-1.5">
+            <label className="block text-xs font-semibold text-zinc-500 mb-2">
               Tipo de Movimiento
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-3 gap-2.5">
               {/* Opción GASTOS */}
               <button
                 type="button"
@@ -216,17 +205,17 @@ export const RegistrarView: React.FC<Props> = ({
                   setModo('gastos');
                   setErrorMensaje(null);
                 }}
-                className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg border text-center transition-all ${
+                className={`min-h-[56px] flex flex-col items-center justify-center py-3 px-2 rounded-xl border text-center transition-all cursor-pointer ${
                   modo === 'gastos'
                     ? 'border-[#EF4444] bg-[#FEF2F2] text-[#991B1B] font-bold shadow-xs ring-1 ring-[#EF4444]'
-                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                    : 'border-zinc-200/80 bg-white text-zinc-600 hover:bg-zinc-50 font-medium'
                 }`}
               >
                 <div className="flex items-center gap-1.5">
                   <TrendingDown size={16} className={modo === 'gastos' ? 'text-[#DC2626]' : 'text-zinc-400'} />
                   <span className="text-xs sm:text-sm">Gastos</span>
                 </div>
-                <span className="text-[10px] text-zinc-500 mt-0.5">Negocio</span>
+                <span className="text-[10px] text-zinc-400 mt-0.5">Negocio</span>
               </button>
 
               {/* Opción PERSONAL */}
@@ -236,17 +225,17 @@ export const RegistrarView: React.FC<Props> = ({
                   setModo('personal');
                   setErrorMensaje(null);
                 }}
-                className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg border text-center transition-all ${
+                className={`min-h-[56px] flex flex-col items-center justify-center py-3 px-2 rounded-xl border text-center transition-all cursor-pointer ${
                   modo === 'personal'
                     ? 'border-[#F59E0B] bg-[#FFFBEB] text-[#92400E] font-bold shadow-xs ring-1 ring-[#F59E0B]'
-                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                    : 'border-zinc-200/80 bg-white text-zinc-600 hover:bg-zinc-50 font-medium'
                 }`}
               >
                 <div className="flex items-center gap-1.5">
                   <User size={16} className={modo === 'personal' ? 'text-[#D97706]' : 'text-zinc-400'} />
                   <span className="text-xs sm:text-sm">Personal</span>
                 </div>
-                <span className="text-[10px] text-zinc-500 mt-0.5">Retiros / Ocio</span>
+                <span className="text-[10px] text-zinc-400 mt-0.5">Retiros</span>
               </button>
 
               {/* Opción VENTAS */}
@@ -256,27 +245,27 @@ export const RegistrarView: React.FC<Props> = ({
                   setModo('ventas');
                   setErrorMensaje(null);
                 }}
-                className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg border text-center transition-all ${
+                className={`min-h-[56px] flex flex-col items-center justify-center py-3 px-2 rounded-xl border text-center transition-all cursor-pointer ${
                   modo === 'ventas'
                     ? 'border-[#10B981] bg-[#ECFDF5] text-[#065F46] font-bold shadow-xs ring-1 ring-[#10B981]'
-                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                    : 'border-zinc-200/80 bg-white text-zinc-600 hover:bg-zinc-50 font-medium'
                 }`}
               >
                 <div className="flex items-center gap-1.5">
                   <TrendingUp size={16} className={modo === 'ventas' ? 'text-[#059669]' : 'text-zinc-400'} />
                   <span className="text-xs sm:text-sm">Ventas</span>
                 </div>
-                <span className="text-[10px] text-zinc-500 mt-0.5">Ingresos</span>
+                <span className="text-[10px] text-zinc-400 mt-0.5">Ingresos</span>
               </button>
             </div>
           </div>
 
           {/* 2. Fila: Puesto y Fecha */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             {/* Selector de Puesto */}
             <div>
-              <label className="block text-xs font-semibold text-[#52525B] mb-1">
-                <span className="flex items-center gap-1">
+              <label className="block text-xs font-semibold text-zinc-500 mb-1.5">
+                <span className="flex items-center gap-1.5">
                   <Store size={13} />
                   Puesto de Venta
                 </span>
@@ -284,7 +273,7 @@ export const RegistrarView: React.FC<Props> = ({
               <select
                 value={puestoId}
                 onChange={(e) => setPuestoId(e.target.value)}
-                className="w-full px-3 py-2 text-xs sm:text-sm border border-[#E4E4E7] rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E]"
+                className="w-full min-h-[44px] px-3 py-2.5 text-xs sm:text-sm border border-zinc-200 rounded-xl bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A]"
               >
                 <option value="">Sin puesto específico (General)</option>
                 {puestos.map((p) => (
@@ -297,8 +286,8 @@ export const RegistrarView: React.FC<Props> = ({
 
             {/* Selector de Fecha */}
             <div>
-              <label className="block text-xs font-semibold text-[#52525B] mb-1">
-                <span className="flex items-center gap-1">
+              <label className="block text-xs font-semibold text-zinc-500 mb-1.5">
+                <span className="flex items-center gap-1.5">
                   <Calendar size={13} />
                   Fecha
                 </span>
@@ -308,25 +297,25 @@ export const RegistrarView: React.FC<Props> = ({
                 value={fecha}
                 onChange={(e) => setFecha(e.target.value)}
                 required
-                className="w-full px-3 py-2 text-xs sm:text-sm border border-[#E4E4E7] rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E]"
+                className="w-full min-h-[44px] px-3 py-2.5 text-xs sm:text-sm border border-zinc-200 rounded-xl bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A]"
               />
             </div>
           </div>
 
           {/* 3. Selector de Método de Pago */}
           <div>
-            <label className="block text-xs font-semibold text-[#52525B] mb-1.5">
+            <label className="block text-xs font-semibold text-zinc-500 mb-2">
               Método de Pago
             </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               {/* Pago Móvil */}
               <button
                 type="button"
                 onClick={() => setMetodoPago('pago_movil')}
-                className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg border text-xs transition-all ${
+                className={`min-h-[44px] flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl border text-xs transition-all cursor-pointer ${
                   metodoPago === 'pago_movil'
-                    ? 'border-[#2C474E] bg-[#2C474E] text-white font-bold shadow-xs'
-                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                    ? 'border-[#1E3A3A] bg-[#1E3A3A] text-white font-bold shadow-xs'
+                    : 'border-zinc-200/80 bg-white text-zinc-600 hover:bg-zinc-50 font-medium'
                 }`}
               >
                 <Smartphone size={14} />
@@ -337,10 +326,10 @@ export const RegistrarView: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setMetodoPago('efectivo_bs')}
-                className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg border text-xs transition-all ${
+                className={`min-h-[44px] flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl border text-xs transition-all cursor-pointer ${
                   metodoPago === 'efectivo_bs'
-                    ? 'border-[#2C474E] bg-[#2C474E] text-white font-bold shadow-xs'
-                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                    ? 'border-[#1E3A3A] bg-[#1E3A3A] text-white font-bold shadow-xs'
+                    : 'border-zinc-200/80 bg-white text-zinc-600 hover:bg-zinc-50 font-medium'
                 }`}
               >
                 <Banknote size={14} />
@@ -351,10 +340,10 @@ export const RegistrarView: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setMetodoPago('punto_venta')}
-                className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg border text-xs transition-all ${
+                className={`min-h-[44px] flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl border text-xs transition-all cursor-pointer ${
                   metodoPago === 'punto_venta'
-                    ? 'border-[#2C474E] bg-[#2C474E] text-white font-bold shadow-xs'
-                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                    ? 'border-[#1E3A3A] bg-[#1E3A3A] text-white font-bold shadow-xs'
+                    : 'border-zinc-200/80 bg-white text-zinc-600 hover:bg-zinc-50 font-medium'
                 }`}
               >
                 <CreditCard size={14} />
@@ -365,10 +354,10 @@ export const RegistrarView: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setMetodoPago('divisa')}
-                className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg border text-xs transition-all ${
+                className={`min-h-[44px] flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl border text-xs transition-all cursor-pointer ${
                   metodoPago === 'divisa'
                     ? 'border-[#15803D] bg-[#15803D] text-white font-bold shadow-xs'
-                    : 'border-[#E4E4E7] bg-white text-[#52525B] hover:bg-zinc-50 font-medium'
+                    : 'border-zinc-200/80 bg-white text-zinc-600 hover:bg-zinc-50 font-medium'
                 }`}
               >
                 <DollarSign size={14} />
@@ -380,8 +369,8 @@ export const RegistrarView: React.FC<Props> = ({
           {/* 4. Categoría opcional para Gastos */}
           {modo === 'gastos' && (
             <div>
-              <label className="block text-xs font-semibold text-[#52525B] mb-1">
-                <span className="flex items-center gap-1">
+              <label className="block text-xs font-semibold text-zinc-500 mb-1.5">
+                <span className="flex items-center gap-1.5">
                   <Tag size={13} />
                   Categoría del Gasto
                 </span>
@@ -389,7 +378,7 @@ export const RegistrarView: React.FC<Props> = ({
               <select
                 value={categoriaGasto}
                 onChange={(e) => setCategoriaGasto(e.target.value as CategoriaMovimiento)}
-                className="w-full px-3 py-2 text-xs sm:text-sm border border-[#E4E4E7] rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E]"
+                className="w-full min-h-[44px] px-3 py-2.5 text-xs sm:text-sm border border-zinc-200 rounded-xl bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A]"
               >
                 {CATEGORIAS_GASTO.filter((c) => c.naturaleza === 'Negocio').map((c) => (
                   <option key={c.nombre} value={c.nombre}>
@@ -402,12 +391,12 @@ export const RegistrarView: React.FC<Props> = ({
 
           {/* 5. Input de Monto con Conversión en Vivo */}
           <div>
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs font-semibold text-[#18181B]">
                 {esDolar ? 'Monto en Divisas ($ USD)' : 'Monto en Bolívares (Bs)'}
               </label>
               {montoNumerico > 0 && (
-                <span className="text-[11px] font-semibold text-[#2C474E] tabular-nums bg-zinc-100 px-2 py-0.5 rounded">
+                <span className="text-[11px] font-semibold text-[#1E3A3A] tabular-nums bg-emerald-50 border border-emerald-200/70 px-2.5 py-0.5 rounded-full">
                   {esDolar
                     ? `≈ Bs. ${formatNumber(montoEquivalente)}`
                     : `≈ $ ${formatNumber(montoEquivalente)}`}
@@ -416,7 +405,7 @@ export const RegistrarView: React.FC<Props> = ({
             </div>
 
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-zinc-400">
+              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-zinc-400">
                 {esDolar ? '$' : 'Bs.'}
               </span>
               <input
@@ -426,19 +415,14 @@ export const RegistrarView: React.FC<Props> = ({
                 onChange={(e) => setMonto(e.target.value)}
                 placeholder="0.00"
                 required
-                className="w-full pl-10 pr-3 py-2.5 text-base sm:text-lg font-bold border border-[#E4E4E7] rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E] tabular-nums"
+                className="w-full min-h-[48px] pl-11 pr-3.5 py-3 text-base sm:text-lg font-bold border border-zinc-200 rounded-xl bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A] tabular-nums"
               />
             </div>
-            <p className="text-[11px] text-zinc-500 mt-1">
-              {esDolar
-                ? `Conversión oficial: $1.00 = ${formatNumber(tasaSegura)} Bs`
-                : `Conversión oficial: ${formatNumber(tasaSegura)} Bs = $1.00`}
-            </p>
           </div>
 
           {/* 6. Input de Descripción / Concepto */}
           <div>
-            <label className="block text-xs font-semibold text-[#18181B] mb-1">
+            <label className="block text-xs font-semibold text-[#18181B] mb-1.5">
               Descripción / Concepto
             </label>
             <input
@@ -453,17 +437,17 @@ export const RegistrarView: React.FC<Props> = ({
                   : 'Ej: Venta del día, venta evento...'
               }
               required
-              className="w-full px-3 py-2.5 text-xs sm:text-sm border border-[#E4E4E7] rounded-lg bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2C474E]"
+              className="w-full min-h-[46px] px-3.5 py-2.5 text-xs sm:text-sm border border-zinc-200 rounded-xl bg-[#FAFAFA] text-[#18181B] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1E3A3A]"
             />
 
             {/* Chips de sugerencias rápidas */}
-            <div className="flex flex-wrap gap-1.5 mt-2">
+            <div className="flex flex-wrap gap-2 mt-2.5">
               {sugerencias[modo].map((sug) => (
                 <button
                   key={sug}
                   type="button"
                   onClick={() => setDescripcion(sug)}
-                  className="px-2 py-1 text-[11px] bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-md transition-colors"
+                  className="px-2.5 py-1.5 text-[11px] font-medium bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-lg transition-colors cursor-pointer"
                 >
                   + {sug}
                 </button>
@@ -473,14 +457,14 @@ export const RegistrarView: React.FC<Props> = ({
 
           {/* Mensajes de Alerta / Éxito */}
           {errorMensaje && (
-            <div className="p-3 bg-[#FEF2F2] border border-[#FECACA] rounded-lg text-xs text-[#991B1B] flex items-start gap-2">
+            <div className="p-3 bg-[#FEF2F2] border border-[#FECACA] rounded-xl text-xs text-[#991B1B] flex items-start gap-2">
               <AlertCircle size={16} className="shrink-0 mt-0.5" />
               <span>{errorMensaje}</span>
             </div>
           )}
 
           {exitoMensaje && (
-            <div className="p-3 bg-[#ECFDF5] border border-[#BBF7D0] rounded-lg text-xs text-[#166534] flex items-start gap-2 animate-fadeIn">
+            <div className="p-3 bg-[#ECFDF5] border border-[#BBF7D0] rounded-xl text-xs text-[#166534] flex items-start gap-2 animate-fadeIn">
               <CheckCircle2 size={16} className="shrink-0 mt-0.5 text-[#166534]" />
               <span className="font-semibold">{exitoMensaje}</span>
             </div>
@@ -490,22 +474,22 @@ export const RegistrarView: React.FC<Props> = ({
           <button
             type="submit"
             disabled={guardando}
-            className={`w-full min-h-[46px] px-4 py-2.5 text-xs sm:text-sm font-bold text-white rounded-lg flex items-center justify-center gap-2 transition-all shadow-xs ${
+            className={`w-full min-h-[50px] px-4 py-3 text-sm font-bold text-white rounded-xl flex items-center justify-center gap-2 transition-all shadow-xs cursor-pointer ${
               modo === 'ventas'
                 ? 'bg-[#15803D] hover:bg-[#166534] active:bg-[#14532D]'
                 : modo === 'personal'
                 ? 'bg-[#D97706] hover:bg-[#B45309] active:bg-[#92400E]'
-                : 'bg-[#2C474E] hover:bg-[#23393e] active:bg-[#1a2b2f]'
+                : 'bg-[#1E3A3A] hover:bg-[#172e2e] active:bg-[#102222]'
             } disabled:opacity-60`}
           >
             {guardando ? (
               <>
-                <Loader2 size={16} className="animate-spin text-white" />
+                <Loader2 size={17} className="animate-spin text-white" />
                 <span>Guardando movimiento...</span>
               </>
             ) : (
               <>
-                <CheckCircle2 size={16} />
+                <CheckCircle2 size={17} />
                 <span>
                   {modo === 'ventas'
                     ? 'Guardar Venta'

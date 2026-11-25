@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { Movimiento, Puesto, TipoMovimiento } from '../types';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
-import { calcularMontos, formatMontoMovimiento, formatUSD, formatVES, formatNumber } from '../utils/format';
+import { calcularMontos, formatUSD, formatVES, formatNumber } from '../utils/format';
 import { METODOS_PAGO_LABELS } from '../types';
 import { ModalMovimiento } from '../components/ModalMovimiento';
 import { ModalCierrePuesto } from '../components/ModalCierrePuesto';
@@ -273,10 +273,10 @@ export const MovimientosView: React.FC<Props> = ({
               setMovimientoParaEditar(null);
               setModalAbierto(true);
             }}
-            className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-[#2C474E] text-white rounded hover:bg-[#23393e] active:bg-[#1a2b2f] transition-colors cursor-pointer"
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-[#1E3A3A] text-white rounded-lg hover:bg-[#172e2e] active:bg-[#102222] transition-colors cursor-pointer shadow-xs"
           >
             <Plus size={14} />
-            <span>+ Nuevo</span>
+            <span>Nuevo</span>
           </button>
         </div>
       </div>
@@ -388,14 +388,14 @@ export const MovimientosView: React.FC<Props> = ({
           {gruposPorFecha.map((grupo) => (
             <div
               key={grupo.fecha}
-              className="bg-white border border-[#E4E4E7] rounded-lg overflow-hidden shadow-xs"
+              className="bg-white border border-zinc-200/80 rounded-2xl overflow-hidden shadow-xs"
             >
               {/* Encabezado del Día */}
-              <div className="bg-[#FAFAFA] border-b border-[#E4E4E7] px-3.5 py-2 flex items-center justify-between text-xs flex-wrap gap-2">
+              <div className="bg-zinc-50/80 border-b border-zinc-100 px-3.5 py-2.5 flex items-center justify-between text-xs flex-wrap gap-2">
                 <div className="flex items-center gap-1.5 font-bold text-[#18181B]">
-                  <Calendar size={14} className="text-[#52525B]" />
+                  <Calendar size={14} className="text-zinc-500" />
                   <span className="tabular-nums font-mono">{grupo.fecha}</span>
-                  <span className="text-[11px] font-normal text-[#52525B]">
+                  <span className="text-[11px] font-normal text-zinc-400">
                     ({grupo.items.length} {grupo.items.length === 1 ? 'registro' : 'registros'})
                   </span>
                 </div>
@@ -410,7 +410,7 @@ export const MovimientosView: React.FC<Props> = ({
               </div>
 
               {/* Items del Día: Tarjetas unificadas de cierre diario + Movimientos individuales */}
-              <div className="divide-y divide-[#E4E4E7]">
+              <div className="divide-y divide-zinc-100">
                 {grupo.elementos.map((elem) => {
                   if (elem.tipo === 'cierre') {
                     const cierre = elem;
@@ -543,60 +543,67 @@ export const MovimientosView: React.FC<Props> = ({
                     );
                   }
 
-                  // Movimiento Individual (Gastos, retiros o ventas manuales)
+                  // Movimiento Individual (Gastos, retiros o ventas manuales) — 2 líneas limpias
                   const item = elem.movimiento;
-                  const nombrePuesto = item.puesto?.nombre || (item.puesto_id ? mapaPuestos[item.puesto_id] : null);
+                  const nombrePuesto =
+                    item.puesto?.nombre || (item.puesto_id ? mapaPuestos[item.puesto_id] : null);
+                  const { monto_usd, monto_bs } = calcularMontos(item);
+                  const esVenta = item.tipo === 'venta' || item.tipo === 'ingreso';
+                  const esUSD = item.moneda_original === 'USD';
+                  const signo = esVenta ? '+' : '-';
+                  const metodoLabel = METODOS_PAGO_LABELS[item.metodo_pago] || item.metodo_pago;
+                  const tasaItem = item.tasa_aplicada || item.tasa || tasaDia;
 
                   return (
                     <div
                       key={item.id}
-                      className="p-3 flex items-center justify-between gap-2 hover:bg-zinc-50 transition-colors"
+                      className="p-3.5 hover:bg-zinc-50/70 transition-colors"
                     >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 flex-wrap mb-1">
-                          <span className="text-xs font-bold text-[#18181B] truncate">
-                            {item.descripcion}
+                      {/* Línea 1: Descripción clara a la izquierda + Monto principal (y equivalente sutil debajo) a la derecha */}
+                      <div className="flex items-start justify-between gap-3">
+                        <span className="text-xs sm:text-sm font-bold text-[#18181B] truncate leading-snug pt-0.5">
+                          {item.descripcion}
+                        </span>
+                        <div className="text-right shrink-0">
+                          <span
+                            className={`block text-xs sm:text-sm font-bold tabular-nums whitespace-nowrap leading-snug ${
+                              esVenta ? 'text-[#166534]' : 'text-[#991B1B]'
+                            }`}
+                          >
+                            {esUSD
+                              ? `${signo} ${formatUSD(monto_usd)}`
+                              : `${signo} ${formatNumber(monto_bs)} Bs`}
                           </span>
-                          <BadgeNaturaleza naturaleza={item.naturaleza} tipo={item.tipo} />
-                          <span className="text-[10px] text-[#52525B] bg-zinc-100 px-1.5 py-0.5 rounded border border-zinc-200">
-                            {METODOS_PAGO_LABELS[item.metodo_pago] || item.metodo_pago}
-                          </span>
-                          {/* BADGE DEL PUESTO DE VENTA */}
-                          {nombrePuesto && (
-                            <span className="text-[10px] font-bold text-[#166534] bg-[#ECFDF5] border border-[#BBF7D0] px-1.5 py-0.5 rounded flex items-center gap-1">
-                              <Store size={10} />
-                              <span>{nombrePuesto}</span>
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 text-[11px] text-[#52525B]">
-                          <span className="truncate">{item.categoria}</span>
-                          <span>•</span>
-                          <span className="tabular-nums">
-                            Tasa: {item.tasa_aplicada} Bs/$
+                          <span className="block text-[10px] sm:text-[11px] text-zinc-400 tabular-nums whitespace-nowrap">
+                            {esUSD ? `${formatNumber(monto_bs)} Bs` : formatUSD(monto_usd)}
                           </span>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        <div className="text-right">
-                          <span
-                            className={`block text-xs sm:text-sm font-bold tabular-nums ${
-                              item.tipo === 'venta' ? 'text-[#166534]' : 'text-[#991B1B]'
-                            }`}
-                          >
-                            {item.tipo === 'venta' ? '+' : '-'} {formatMontoMovimiento(item)}
+                      {/* Línea 2: Badge suave + metadatos separados por puntos · + Íconos discretos a la derecha */}
+                      <div className="flex items-center justify-between gap-2 mt-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <BadgeNaturaleza
+                            naturaleza={item.naturaleza}
+                            tipo={item.tipo}
+                            className="shrink-0"
+                          />
+                          <span className="text-[11px] text-zinc-500 truncate">
+                            {metodoLabel}
+                            {item.categoria ? ` · ${item.categoria}` : ''}
+                            {nombrePuesto ? ` · ${nombrePuesto}` : ''}
+                            {` · Tasa ${formatNumber(tasaItem)}`}
                           </span>
                         </div>
 
-                        <div className="flex items-center gap-1 border-l border-[#E4E4E7] pl-2 ml-1">
+                        <div className="flex items-center gap-0.5 shrink-0">
                           <button
                             type="button"
                             onClick={() => {
                               setMovimientoParaEditar(item);
                               setModalAbierto(true);
                             }}
-                            className="p-1.5 text-[#52525B] hover:text-[#2C474E] hover:bg-zinc-100 rounded transition-colors cursor-pointer"
+                            className="p-1.5 text-zinc-400 hover:text-[#1E3A3A] hover:bg-zinc-100 rounded-lg transition-colors cursor-pointer"
                             title="Editar movimiento"
                           >
                             <Pencil size={14} />
@@ -604,7 +611,7 @@ export const MovimientosView: React.FC<Props> = ({
                           <button
                             type="button"
                             onClick={() => handleEliminar(item.id)}
-                            className="p-1.5 text-[#52525B] hover:text-[#991B1B] hover:bg-red-50 rounded transition-colors cursor-pointer"
+                            className="p-1.5 text-zinc-400 hover:text-[#991B1B] hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
                             title="Eliminar movimiento"
                           >
                             <Trash2 size={14} />

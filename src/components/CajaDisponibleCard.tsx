@@ -36,138 +36,118 @@ export const CajaDisponibleCard: React.FC<Props> = ({
   const tasaSegura = tasaBcv > 0 ? tasaBcv : 100;
 
   return (
-    <div className="bg-white border border-[#E4E4E7] rounded-xl p-3.5 sm:p-4 shadow-xs space-y-3">
-      {/* Cabecera del bloque */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-zinc-100">
-        <div className="flex items-center gap-2">
-          <div className="p-2 bg-[#ECFDF5] border border-[#BBF7D0] rounded-lg text-[#166534]">
-            <Wallet size={18} />
+    <div className="bg-white border border-zinc-200/80 rounded-2xl p-4 shadow-xs space-y-3.5">
+      {/* Cabecera compacta con título y acciones discretas */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="p-1.5 bg-[#ECFDF5] rounded-lg text-[#1E3A3A] shrink-0">
+            <Wallet size={16} />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm sm:text-base font-bold text-[#18181B] tracking-tight">
-                Dinero Disponible de la Empresa
-              </h2>
-              {cargando && <Loader2 size={13} className="animate-spin text-zinc-400" />}
-            </div>
-            <p className="text-[11px] text-[#71717A]">
-              Saldo real acumulado en cada bolsillo contable (ventas, gastos y cambios)
-            </p>
-          </div>
+          <h2 className="text-sm font-bold text-[#18181B] tracking-tight truncate">
+            Dinero Disponible
+          </h2>
+          {cargando && <Loader2 size={13} className="animate-spin text-zinc-400 shrink-0" />}
         </div>
 
-        {/* Botones de Acción */}
-        <div className="flex items-center gap-2 self-end sm:self-auto">
+        <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
             onClick={onAbrirSaldoInicial}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-[#2C474E] bg-white border border-[#E4E4E7] rounded-lg hover:bg-zinc-50 active:bg-zinc-100 shadow-xs transition-colors min-h-[36px]"
-            title="Ajustar saldo base inicial de caja"
+            className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-600 bg-zinc-50 hover:bg-zinc-100 border border-zinc-200/80 rounded-lg transition-colors min-h-[32px] cursor-pointer"
+            title="Ajustar saldo base inicial"
           >
-            <SlidersHorizontal size={14} className="text-[#52525B]" />
+            <SlidersHorizontal size={12} />
             <span>Saldo Inicial</span>
           </button>
 
           <button
             type="button"
             onClick={onAbrirTransferencia}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#2C474E] hover:bg-[#23393e] active:bg-[#1a2b2f] rounded-lg shadow-xs transition-colors min-h-[36px]"
-            title="Mover dinero entre bolsillos o registrar cambio de divisas"
+            className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A3A] hover:bg-[#172e2e] rounded-lg transition-colors min-h-[32px] cursor-pointer"
+            title="Mover dinero o cambiar moneda"
           >
-            <ArrowLeftRight size={14} className="text-[#86EFAC]" />
+            <ArrowLeftRight size={12} className="text-[#86EFAC]" />
             <span>Mover / Cambiar</span>
           </button>
         </div>
       </div>
 
-      {/* Resumen Total Consolidado */}
-      <div className="bg-gradient-to-r from-zinc-50 to-slate-50 border border-zinc-200/80 rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs font-semibold text-zinc-600">
-          Total Consolidado en Caja:
-        </span>
-        <div className="flex items-baseline gap-2">
-          <span className="text-base sm:text-lg font-black text-[#166534] tabular-nums tracking-tight">
-            ${formatNumber(totalConsolidadoUsd)} <span className="text-xs font-bold">USD</span>
+      {/* Total Consolidado Protagonista */}
+      <div className="bg-[#F8FAFC] border border-zinc-100 rounded-xl px-3.5 py-2.5 flex items-baseline justify-between gap-2">
+        <span className="text-xs font-semibold text-zinc-500">Total Consolidado</span>
+        <div className="text-right">
+          <span
+            className={`text-xl sm:text-2xl font-black tabular-nums tracking-tight ${
+              totalConsolidadoUsd < 0 ? 'text-red-600' : 'text-[#1E3A3A]'
+            }`}
+          >
+            ${formatNumber(totalConsolidadoUsd)}
           </span>
-          <span className="text-xs text-zinc-500 font-medium tabular-nums">
-            (≈ Bs. {formatNumber(totalConsolidadoBs)})
+          <span className="ml-1 text-[11px] font-bold text-zinc-500">USD</span>
+          <span className="block text-[11px] text-zinc-400 font-medium tabular-nums">
+            ≈ Bs. {formatNumber(totalConsolidadoBs)}
           </span>
         </div>
       </div>
 
-      {/* Tarjetas de los 3 bolsillos */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-        {/* Bolsillo 1: Digital / Banco (Bs) */}
-        <div className="border border-blue-200 bg-blue-50/40 rounded-xl p-3 flex flex-col justify-between transition-all hover:shadow-xs">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs font-bold text-blue-950 flex items-center gap-1.5">
-              <Smartphone size={14} className="text-blue-600" />
-              Digital / Banco (Bs)
-            </span>
-            <span className="text-[10px] font-medium text-blue-700 bg-blue-100/70 px-1.5 py-0.5 rounded">
-              PM / Punto
-            </span>
+      {/* 3 Bolsillos en cuadrícula compacta de 3 columnas */}
+      <div className="grid grid-cols-3 gap-2">
+        {/* Digital / Banco */}
+        <div className="border border-zinc-100 bg-zinc-50/70 rounded-xl p-2.5 flex flex-col justify-between min-w-0">
+          <div className="flex items-center gap-1 text-zinc-600 mb-1">
+            <Smartphone size={13} className="text-[#1E3A3A] shrink-0" />
+            <span className="text-[11px] font-semibold truncate">Digital / Banco</span>
           </div>
-          <div>
+          <div className="min-w-0">
             <div
-              className={`text-base sm:text-lg font-black tabular-nums tracking-tight ${
-                digitalBs < 0 ? 'text-red-600' : 'text-blue-900'
+              className={`text-xs sm:text-sm font-bold tabular-nums tracking-tight truncate ${
+                digitalBs < 0 ? 'text-red-600' : 'text-[#18181B]'
               }`}
             >
               Bs. {formatNumber(digitalBs)}
             </div>
-            <div className="text-[11px] text-zinc-500 font-medium tabular-nums mt-0.5">
-              ≈ ${formatNumber(tasaSegura > 0 ? digitalBs / tasaSegura : 0)} USD
+            <div className="text-[10px] text-zinc-400 tabular-nums truncate mt-0.5">
+              ${formatNumber(tasaSegura > 0 ? digitalBs / tasaSegura : 0)}
             </div>
           </div>
         </div>
 
-        {/* Bolsillo 2: Efectivo (Bs) */}
-        <div className="border border-emerald-200 bg-emerald-50/40 rounded-xl p-3 flex flex-col justify-between transition-all hover:shadow-xs">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
-              <Banknote size={14} className="text-emerald-600" />
-              Efectivo (Bs)
-            </span>
-            <span className="text-[10px] font-medium text-emerald-700 bg-emerald-100/70 px-1.5 py-0.5 rounded">
-              Billetes Bs
-            </span>
+        {/* Efectivo */}
+        <div className="border border-zinc-100 bg-zinc-50/70 rounded-xl p-2.5 flex flex-col justify-between min-w-0">
+          <div className="flex items-center gap-1 text-zinc-600 mb-1">
+            <Banknote size={13} className="text-emerald-600 shrink-0" />
+            <span className="text-[11px] font-semibold truncate">Efectivo</span>
           </div>
-          <div>
+          <div className="min-w-0">
             <div
-              className={`text-base sm:text-lg font-black tabular-nums tracking-tight ${
-                efectivoBs < 0 ? 'text-red-600' : 'text-emerald-900'
+              className={`text-xs sm:text-sm font-bold tabular-nums tracking-tight truncate ${
+                efectivoBs < 0 ? 'text-red-600' : 'text-[#18181B]'
               }`}
             >
               Bs. {formatNumber(efectivoBs)}
             </div>
-            <div className="text-[11px] text-zinc-500 font-medium tabular-nums mt-0.5">
-              ≈ ${formatNumber(tasaSegura > 0 ? efectivoBs / tasaSegura : 0)} USD
+            <div className="text-[10px] text-zinc-400 tabular-nums truncate mt-0.5">
+              ${formatNumber(tasaSegura > 0 ? efectivoBs / tasaSegura : 0)}
             </div>
           </div>
         </div>
 
-        {/* Bolsillo 3: Divisas ($ USD) */}
-        <div className="border border-amber-200 bg-amber-50/40 rounded-xl p-3 flex flex-col justify-between transition-all hover:shadow-xs">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
-              <DollarSign size={14} className="text-amber-600" />
-              Divisas ($ USD)
-            </span>
-            <span className="text-[10px] font-medium text-amber-700 bg-amber-100/70 px-1.5 py-0.5 rounded">
-              Billetes $
-            </span>
+        {/* Divisas */}
+        <div className="border border-zinc-100 bg-zinc-50/70 rounded-xl p-2.5 flex flex-col justify-between min-w-0">
+          <div className="flex items-center gap-1 text-zinc-600 mb-1">
+            <DollarSign size={13} className="text-amber-600 shrink-0" />
+            <span className="text-[11px] font-semibold truncate">Divisas</span>
           </div>
-          <div>
+          <div className="min-w-0">
             <div
-              className={`text-base sm:text-lg font-black tabular-nums tracking-tight ${
-                divisasUsd < 0 ? 'text-red-600' : 'text-amber-900'
+              className={`text-xs sm:text-sm font-bold tabular-nums tracking-tight truncate ${
+                divisasUsd < 0 ? 'text-red-600' : 'text-[#18181B]'
               }`}
             >
-              ${formatNumber(divisasUsd)} USD
+              ${formatNumber(divisasUsd)}
             </div>
-            <div className="text-[11px] text-zinc-500 font-medium tabular-nums mt-0.5">
-              ≈ Bs. {formatNumber(divisasUsd * tasaSegura)}
+            <div className="text-[10px] text-zinc-400 tabular-nums truncate mt-0.5">
+              Bs. {formatNumber(divisasUsd * tasaSegura)}
             </div>
           </div>
         </div>

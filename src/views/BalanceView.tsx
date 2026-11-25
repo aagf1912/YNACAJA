@@ -2,11 +2,11 @@ import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Download,
   Share2,
   Calendar,
-  DollarSign,
-  TrendingUp,
   TrendingDown,
   PieChart as PieIcon,
   BarChart2,
@@ -53,6 +53,32 @@ interface Props {
   onRecargarDatos?: () => Promise<void>;
 }
 
+const normalizarMetodoPago = (
+  raw?: string
+): 'pago_movil' | 'punto_venta' | 'efectivo_bs' | 'divisa' | null => {
+  if (!raw) return null;
+  const norm = raw
+    .toString()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+  if (norm === 'pago_movil' || norm.includes('pago movil') || norm.includes('pagomovil') || norm === 'pm') {
+    return 'pago_movil';
+  }
+  if (norm === 'punto_venta' || norm.includes('punto') || norm === 'pos') {
+    return 'punto_venta';
+  }
+  if (norm === 'efectivo_bs' || norm === 'efectivo' || norm.includes('efectivo bs') || norm === 'bs_efectivo') {
+    return 'efectivo_bs';
+  }
+  if (norm === 'divisa' || norm === 'divisas' || norm.includes('divisa') || norm === 'usd' || norm === '$') {
+    return 'divisa';
+  }
+  return null;
+};
+
 export const BalanceView: React.FC<Props> = ({
   movimientos,
   puestos = [],
@@ -67,6 +93,11 @@ export const BalanceView: React.FC<Props> = ({
   // Modo de período: 'semanal' o 'mensual'
   const [periodo, setPeriodo] = useState<'semanal' | 'mensual'>('semanal');
   const [fechaMes, setFechaMes] = useState<Date>(() => new Date());
+
+  // Acordeones para evitar scroll infinito en móvil
+  const [detalleDiarioAbierto, setDetalleDiarioAbierto] = useState(false);
+  const [categoriasAbierto, setCategoriasAbierto] = useState(false);
+  const [graficosAbierto, setGraficosAbierto] = useState(false);
 
   // Estado de Caja Disponible en tiempo real
   const [movimientosHistoricos, setMovimientosHistoricos] = useState<Movimiento[]>(movimientos);
@@ -185,13 +216,14 @@ export const BalanceView: React.FC<Props> = ({
           ? montoOrig / tasaActual
           : 0);
 
-      if (m.metodo_pago === 'pago_movil' || m.metodo_pago === 'punto_venta') {
+      const metodoNorm = normalizarMetodoPago(m.metodo_pago);
+      if (metodoNorm === 'pago_movil' || metodoNorm === 'punto_venta') {
         if (esVenta) digitalBs += montoBs;
         if (esGasto) digitalBs -= montoBs;
-      } else if (m.metodo_pago === 'efectivo_bs') {
+      } else if (metodoNorm === 'efectivo_bs') {
         if (esVenta) efectivoBs += montoBs;
         if (esGasto) efectivoBs -= montoBs;
-      } else if (m.metodo_pago === 'divisa') {
+      } else if (metodoNorm === 'divisa') {
         if (esVenta) divisasUsd += montoUsd;
         if (esGasto) divisasUsd -= montoUsd;
       }
@@ -409,37 +441,54 @@ export const BalanceView: React.FC<Props> = ({
     return match ? match.nombre : 'Puesto seleccionado';
   }, [filtroPuesto, puestos]);
 
-  // 1. KPI Totales
-  const { totalIngresosUSD, totalGastosUSD, balanceNetoUSD, totalIngresosBs, totalGastosBs, balanceNetoBs } =
-    useMemo(() => {
-      let ingUSD = 0;
-      let gasUSD = 0;
-      let ingBs = 0;
-      let gasBs = 0;
+  // 1. KPI Totales (incluyendo separación visual entre Gastos Operativos y Retiros Personales)
+  const {
+    totalIngresosUSD,
+    totalGastosUSD,
+    gastosOperativosUSD,
+    retirosPersonalesUSD,
+    balanceNetoUSD,
+    totalIngresosBs,
+    totalGastosBs,
+    balanceNetoBs,
+  } = useMemo(() => {
+    let ingUSD = 0;
+    let gasUSD = 0;
+    let gasOpUSD = 0;
+    let retPersUSD = 0;
+    let ingBs = 0;
+    let gasBs = 0;
 
-      for (const m of movimientosSemanaFiltrados) {
-        const { monto_usd, monto_bs } = calcularMontos(m);
-        if (m.tipo === 'venta' || m.tipo === 'ingreso') {
-          ingUSD += monto_usd;
-          ingBs += monto_bs;
+    for (const m of movimientosSemanaFiltrados) {
+      const { monto_usd, monto_bs } = calcularMontos(m);
+      if (m.tipo === 'venta' || m.tipo === 'ingreso') {
+        ingUSD += monto_usd;
+        ingBs += monto_bs;
+      } else {
+        gasUSD += monto_usd;
+        gasBs += monto_bs;
+        if (m.naturaleza === 'Personal') {
+          retPersUSD += monto_usd;
         } else {
-          gasUSD += monto_usd;
-          gasBs += monto_bs;
+          gasOpUSD += monto_usd;
         }
       }
+    }
 
-      const bUSD = ingUSD - gasUSD;
-      const bBs = ingBs - gasBs;
+    const bUSD = ingUSD - gasUSD;
+    const bBs = ingBs - gasBs;
 
-      return {
-        totalIngresosUSD: ingUSD,
-        totalGastosUSD: gasUSD,
-        balanceNetoUSD: Math.abs(bUSD) < 0.005 || Object.is(bUSD, -0) ? 0 : bUSD,
-        totalIngresosBs: ingBs,
-        totalGastosBs: gasBs,
-        balanceNetoBs: Math.abs(bBs) < 0.005 || Object.is(bBs, -0) ? 0 : bBs,
-      };
-    }, [movimientosSemanaFiltrados]);
+    return {
+      totalIngresosUSD: ingUSD,
+      totalGastosUSD: gasUSD,
+      gastosOperativosUSD: gasOpUSD,
+      retirosPersonalesUSD: retPersUSD,
+      balanceNetoUSD: Math.abs(bUSD) < 0.005 || Object.is(bUSD, -0) ? 0 : bUSD,
+      totalIngresosBs: ingBs,
+      totalGastosBs: gasBs,
+      balanceNetoBs: Math.abs(bBs) < 0.005 || Object.is(bBs, -0) ? 0 : bBs,
+    };
+  }, [movimientosSemanaFiltrados]);
 
   // 2. Resumen por Puesto de Venta (Ventas, Comisión, Liquidaciones Parciales y Saldo Pendiente)
   const resumenPorPuesto = useMemo(() => {
@@ -534,7 +583,7 @@ export const BalanceView: React.FC<Props> = ({
     };
   }, [puestos, movimientosSemana, liquidaciones, infoSemana.semanaInicio]);
 
-  // 3. Resumen de Ingresos por Método de Pago
+  // 3. Resumen de Ingresos por Método de Pago (reconociendo variantes de nombres)
   const ingresosPorMetodo = useMemo(() => {
     const metodos = {
       pago_movil: { bs: 0, usd: 0 },
@@ -546,9 +595,10 @@ export const BalanceView: React.FC<Props> = ({
     for (const m of movimientosSemanaFiltrados) {
       if (m.tipo === 'venta' || m.tipo === 'ingreso') {
         const { monto_usd, monto_bs } = calcularMontos(m);
-        if (metodos[m.metodo_pago]) {
-          metodos[m.metodo_pago].bs += monto_bs;
-          metodos[m.metodo_pago].usd += monto_usd;
+        const key = normalizarMetodoPago(m.metodo_pago);
+        if (key && metodos[key]) {
+          metodos[key].bs += monto_bs;
+          metodos[key].usd += monto_usd;
         }
       }
     }
@@ -639,9 +689,10 @@ export const BalanceView: React.FC<Props> = ({
         reg.totalBs += monto_bs;
         reg.totalUSD += monto_usd;
 
-        if (m.metodo_pago === 'pago_movil') {
+        const key = normalizarMetodoPago(m.metodo_pago);
+        if (key === 'pago_movil') {
           reg.pagoMovilBs += monto_bs;
-        } else if (m.metodo_pago === 'efectivo_bs') {
+        } else if (key === 'efectivo_bs') {
           reg.efectivoBs += monto_bs;
         } else {
           reg.puntoDivisaBs += monto_bs;
@@ -651,6 +702,11 @@ export const BalanceView: React.FC<Props> = ({
 
     return Object.values(mapa).sort((a, b) => b.totalUSD - a.totalUSD);
   }, [movimientosSemanaFiltrados]);
+
+  // Mostrar únicamente categorías con monto mayor a 0
+  const categoriasVisibles = useMemo(() => {
+    return resumenCategorias.filter((c) => c.totalUSD > 0 || c.totalBs > 0);
+  }, [resumenCategorias]);
 
   const totalGastosItemsCount = useMemo(() => {
     return resumenCategorias.reduce((acc, c) => acc + c.itemsCount, 0);
@@ -716,15 +772,15 @@ export const BalanceView: React.FC<Props> = ({
   }, [resumenCategorias]);
 
   const COLORES_PIE = [
-    '#2C474E',
-    '#3B5B64',
-    '#4E7985',
-    '#991B1B',
-    '#B91C1C',
-    '#D97706',
-    '#92400E',
-    '#1E40AF',
-    '#15803D',
+    '#1E3A3A', // verde oscuro corporativo
+    '#10B981', // esmeralda
+    '#0D9488', // teal
+    '#F59E0B', // ámbar suave
+    '#64748B', // gris pizarra
+    '#047857', // esmeralda profundo
+    '#14B8A6', // teal claro
+    '#D97706', // ámbar medio
+    '#475569', // gris pizarra oscuro
   ];
 
   // Navegación Semanas
@@ -1070,140 +1126,141 @@ export const BalanceView: React.FC<Props> = ({
       </div>
 
       {/* CONTENEDOR REPORTE PARA CAPTURA Y VISUALIZACIÓN */}
-      <div ref={reportRef} className="space-y-4 bg-[#F4F4F5] p-1 rounded-md">
-        {/* Barra de Subtítulo Corporativo */}
-        <div className="bg-[#2C474E] text-white px-4 py-2.5 rounded-lg flex items-center justify-between shadow-xs">
-          <div className="flex flex-col">
-            <span className="text-xs sm:text-sm font-bold uppercase tracking-wider">
-              BALANCE SEMANAL — CHICHA ADICTIVA
-            </span>
-            <span className="text-[11px] text-[#86EFAC] font-medium uppercase tracking-wide tabular-nums">
-              {rangoTexto} • {nombreFiltroPuesto}
-            </span>
-          </div>
-        </div>
-
-        {/* 1. TARJETAS KPI EN FILA */}
-        <div className="grid grid-cols-3 gap-2">
+      <div ref={reportRef} className="space-y-4 bg-[#F4F4F5] p-0.5 rounded-xl">
+        {/* 1. LAS 3 TARJETAS RESUMEN SIEMPRE VISIBLES */}
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
           {/* TOTAL INGRESOS */}
-          <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-lg p-2.5 text-center shadow-xs">
-            <span className="block text-[10px] sm:text-xs font-bold text-[#166534] uppercase tracking-wider mb-1">
-              TOTAL INGRESOS ($)
-            </span>
-            <span className="block text-sm sm:text-lg font-black text-[#166534] tabular-nums">
-              {formatUSD(totalIngresosUSD)}
-            </span>
-            <span className="block text-[10px] text-[#166534] opacity-80 tabular-nums font-medium mt-0.5">
+          <div className="bg-white border border-emerald-200/80 rounded-2xl p-2.5 sm:p-3.5 text-center shadow-xs flex flex-col justify-between">
+            <div>
+              <span className="block text-[10px] sm:text-xs font-bold text-[#1E3A3A] uppercase tracking-wider mb-1">
+                Ingresos
+              </span>
+              <span className="block text-sm sm:text-xl font-black text-[#166534] tabular-nums">
+                {formatUSD(totalIngresosUSD)}
+              </span>
+            </div>
+            <span className="block text-[10px] sm:text-[11px] text-zinc-400 tabular-nums font-medium mt-1">
               {formatVES(totalIngresosBs)}
             </span>
           </div>
 
-          {/* TOTAL GASTOS */}
-          <div className="bg-[#FEF2F2] border border-[#FECACA] rounded-lg p-2.5 text-center shadow-xs">
-            <span className="block text-[10px] sm:text-xs font-bold text-[#991B1B] uppercase tracking-wider mb-1">
-              TOTAL GASTOS ($)
-            </span>
-            <span className="block text-sm sm:text-lg font-black text-[#991B1B] tabular-nums">
-              {formatUSD(totalGastosUSD)}
-            </span>
-            <span className="block text-[10px] text-[#991B1B] opacity-80 tabular-nums font-medium mt-0.5">
-              {formatVES(totalGastosBs)}
-            </span>
+          {/* TOTAL GASTOS (separando Operativos vs Personales) */}
+          <div className="bg-white border border-rose-200/80 rounded-2xl p-2.5 sm:p-3.5 text-center shadow-xs flex flex-col justify-between">
+            <div>
+              <span className="block text-[10px] sm:text-xs font-bold text-[#991B1B] uppercase tracking-wider mb-1">
+                Gastos
+              </span>
+              <span className="block text-sm sm:text-xl font-black text-[#991B1B] tabular-nums">
+                {formatUSD(totalGastosUSD)}
+              </span>
+              <span className="block text-[10px] text-zinc-400 tabular-nums font-medium mt-0.5">
+                {formatVES(totalGastosBs)}
+              </span>
+            </div>
+            {/* Separación visual Operativos vs Retiros Personales */}
+            <div className="mt-2 pt-1.5 border-t border-zinc-100 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 text-[9px] sm:text-[10px] tabular-nums">
+              <span className="text-rose-700 font-semibold">
+                Op: {formatUSD(gastosOperativosUSD)}
+              </span>
+              <span className="hidden sm:inline text-zinc-300">·</span>
+              <span className="text-amber-700 font-semibold">
+                Pers: {formatUSD(retirosPersonalesUSD)}
+              </span>
+            </div>
           </div>
 
           {/* BALANCE NETO */}
           <div
-            className={`rounded-lg p-2.5 text-center shadow-xs border ${
+            className={`rounded-2xl p-2.5 sm:p-3.5 text-center shadow-xs border flex flex-col justify-between ${
               balanceNetoUSD >= 0
-                ? 'bg-[#F0FDF4] border-[#86EFAC]'
-                : 'bg-[#FFF1F2] border-[#FDA4AF]'
+                ? 'bg-[#ECFDF5]/60 border-emerald-200/80'
+                : 'bg-rose-50/70 border-rose-200/80'
             }`}
           >
-            <span className="block text-[10px] sm:text-xs font-bold uppercase tracking-wider mb-1 text-[#18181B]">
-              BALANCE NETO ($)
-            </span>
-            <span
-              className={`block text-sm sm:text-lg font-black tabular-nums ${
-                balanceNetoUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
-              }`}
-            >
-              {balanceNetoUSD >= 0 ? '+' : ''}
-              {formatUSD(balanceNetoUSD)}
-            </span>
-            <span className="block text-[10px] text-[#52525B] tabular-nums font-medium mt-0.5">
+            <div>
+              <span className="block text-[10px] sm:text-xs font-bold uppercase tracking-wider mb-1 text-[#18181B]">
+                Balance Neto
+              </span>
+              <span
+                className={`block text-sm sm:text-xl font-black tabular-nums ${
+                  balanceNetoUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
+                }`}
+              >
+                {balanceNetoUSD >= 0 ? '+' : ''}
+                {formatUSD(balanceNetoUSD)}
+              </span>
+            </div>
+            <span className="block text-[10px] sm:text-[11px] text-zinc-500 tabular-nums font-medium mt-1">
               {balanceNetoBs >= 0 ? '+' : ''}
               {formatVES(balanceNetoBs)}
             </span>
           </div>
         </div>
 
-        {/* 2. BLOQUE DESTACADO: RESUMEN POR PUESTO DE VENTA (VENTAS Y COMISIÓN 22%) */}
-        <div className="bg-white border border-[#E4E4E7] rounded-lg overflow-hidden shadow-xs">
-          <div className="bg-[#2C474E] text-white px-3.5 py-2 flex items-center justify-between">
+        {/* 2. TABLA PROTAGONISTA: COMISIÓN VENDEDORES POR PUESTO (bordes suaves y aire) */}
+        <div className="bg-white border border-zinc-200/80 rounded-2xl overflow-hidden shadow-xs">
+          <div className="bg-[#1E3A3A] text-white px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Store size={15} className="text-[#86EFAC]" />
               <span className="text-xs font-bold uppercase tracking-wider">
-                Resumen por Puesto de Venta (Comisión Vendedores)
+                Comisión Vendedores por Puesto
               </span>
             </div>
-            <span className="text-[11px] text-[#86EFAC] font-mono">
-              Período Seleccionado
-            </span>
           </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-left">
               <thead>
-                <tr className="bg-[#FAFAFA] border-b border-[#E4E4E7] text-[#52525B] font-bold">
-                  <th className="py-2 px-3">Puesto de Venta</th>
-                  <th className="py-2 px-2.5 text-center">Cant.</th>
-                  <th className="py-2 px-3 text-right">Total Ventas ($)</th>
-                  <th className="py-2 px-3 text-right text-[#047857]">Comisión Vendedores ($)</th>
-                  <th className="py-2 px-3 text-right text-[#166534]">Neto Negocio ($)</th>
-                  <th className="py-2 px-3 text-right">Liquidación</th>
+                <tr className="bg-zinc-50/80 border-b border-zinc-100 text-zinc-500 font-semibold">
+                  <th className="py-3 px-3.5">Puesto</th>
+                  <th className="py-3 px-2.5 text-center">Cant.</th>
+                  <th className="py-3 px-3.5 text-right">Ventas</th>
+                  <th className="py-3 px-3.5 text-right text-[#047857]">Comisión</th>
+                  <th className="py-3 px-3.5 text-right text-[#1E3A3A]">Neto</th>
+                  <th className="py-3 px-3.5 text-right">Liquidación</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#E4E4E7]">
+              <tbody className="divide-y divide-zinc-100">
                 {resumenPorPuesto.items.map((p) => {
                   return (
-                    <tr key={p.id} className="hover:bg-zinc-50 transition-colors">
-                      <td className="py-2.5 px-3 font-bold text-[#18181B]">
+                    <tr key={p.id} className="hover:bg-zinc-50/70 transition-colors">
+                      <td className="py-3 px-3.5 font-bold text-[#18181B]">
                         {p.nombre}
                         {p.porcentaje > 0 && (
-                          <span className="ml-1.5 text-[10px] text-zinc-500 font-mono font-normal">
+                          <span className="ml-1.5 text-[10px] text-zinc-400 font-normal">
                             ({p.porcentaje}%)
                           </span>
                         )}
                       </td>
-                      <td className="py-2.5 px-2.5 text-center tabular-nums text-zinc-500">
+                      <td className="py-3 px-2.5 text-center tabular-nums text-zinc-500">
                         {p.ventasCount}
                       </td>
-                      <td className="py-2.5 px-3 text-right tabular-nums font-bold text-[#18181B]">
+                      <td className="py-3 px-3.5 text-right tabular-nums font-bold text-[#18181B]">
                         {formatUSD(p.totalUSD)}
                       </td>
-                      <td className="py-2.5 px-3 text-right tabular-nums font-bold text-[#047857] font-mono">
+                      <td className="py-3 px-3.5 text-right tabular-nums font-bold text-[#047857]">
                         <div>({formatUSD(p.comisionUSD)})</div>
                         {p.yaPagadoUsd > 0 && (
-                          <div className="text-[10px] text-[#166534] font-normal font-sans">
+                          <div className="text-[10px] text-[#166534] font-normal">
                             Pagado: {formatUSD(p.yaPagadoUsd)}
                           </div>
                         )}
                       </td>
-                      <td className="py-2.5 px-3 text-right tabular-nums font-black text-[#166534]">
+                      <td className="py-3 px-3.5 text-right tabular-nums font-black text-[#1E3A3A]">
                         {formatUSD(p.netoUSD)}
                       </td>
-                      <td className="py-2.5 px-3 text-right">
+                      <td className="py-3 px-3.5 text-right">
                         {p.pendienteUsd === 0 && p.comisionUSD > 0 ? (
                           <div className="inline-flex items-center gap-1.5 justify-end">
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#ECFDF5] text-[#166534] border border-[#A7F3D0]">
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#ECFDF5] text-[#166534] border border-emerald-200/70">
                               <CheckCircle2 size={12} />
-                              <span>Pagado ✓</span>
+                              <span>Pagado</span>
                             </span>
                             <button
                               type="button"
                               onClick={() => handleAbrirModalPago(p, true)}
                               disabled={liquidandoPuestoId === p.id}
-                              className="px-2 py-0.5 rounded text-[11px] font-bold text-[#2C474E] bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 transition-colors cursor-pointer"
+                              className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-[#1E3A3A] bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
                               title="Registrar pago anticipado / adelanto"
                             >
                               + Adelanto
@@ -1215,7 +1272,7 @@ export const BalanceView: React.FC<Props> = ({
                               type="button"
                               onClick={() => handleAbrirModalPago(p, false)}
                               disabled={liquidandoPuestoId === p.id}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#166534] hover:bg-[#14532d] active:bg-[#0f3d21] text-white shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#166534] hover:bg-[#14532d] text-white shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
                             >
                               {liquidandoPuestoId === p.id ? (
                                 <>
@@ -1227,8 +1284,8 @@ export const BalanceView: React.FC<Props> = ({
                                   <CheckCircle2 size={12} className="text-[#86EFAC]" />
                                   <span>
                                     {p.yaPagadoUsd > 0
-                                      ? `Pagar Saldo (${formatUSD(p.pendienteUsd)})`
-                                      : `Pagar Comisión (${formatUSD(p.pendienteUsd)})`}
+                                      ? `Saldo (${formatUSD(p.pendienteUsd)})`
+                                      : `Pagar (${formatUSD(p.pendienteUsd)})`}
                                   </span>
                                 </>
                               )}
@@ -1237,7 +1294,7 @@ export const BalanceView: React.FC<Props> = ({
                               type="button"
                               onClick={() => handleAbrirModalPago(p, true)}
                               disabled={liquidandoPuestoId === p.id}
-                              className="px-2 py-1 rounded text-[11px] font-bold text-[#2C474E] bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 transition-colors cursor-pointer"
+                              className="px-2 py-1.5 rounded-lg text-[11px] font-semibold text-[#1E3A3A] bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
                               title="Registrar monto diferente o adelanto"
                             >
                               + Adelanto
@@ -1248,13 +1305,13 @@ export const BalanceView: React.FC<Props> = ({
                             type="button"
                             onClick={() => handleAbrirModalPago(p, true)}
                             disabled={liquidandoPuestoId === p.id}
-                            className="px-2 py-1 rounded text-[11px] font-bold text-[#2C474E] bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 transition-colors cursor-pointer"
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-[#1E3A3A] bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
                             title="Registrar adelanto de comisión"
                           >
                             + Adelanto
                           </button>
                         ) : (
-                          <span className="text-zinc-400 text-xs italic">-</span>
+                          <span className="text-zinc-300 text-xs">-</span>
                         )}
                       </td>
                     </tr>
@@ -1262,392 +1319,404 @@ export const BalanceView: React.FC<Props> = ({
                 })}
               </tbody>
               <tfoot>
-                <tr className="bg-zinc-100 font-bold border-t-2 border-[#2C474E] text-[#18181B]">
-                  <td className="py-2.5 px-3">TOTAL PUESTOS</td>
-                  <td className="py-2.5 px-2.5 text-center tabular-nums">
+                <tr className="bg-zinc-50 font-bold border-t border-zinc-200 text-[#18181B]">
+                  <td className="py-3 px-3.5">TOTAL PUESTOS</td>
+                  <td className="py-3 px-2.5 text-center tabular-nums text-zinc-500">
                     {resumenPorPuesto.items.reduce((acc, i) => acc + i.ventasCount, 0)}
                   </td>
-                  <td className="py-2.5 px-3 text-right tabular-nums text-[#18181B]">
+                  <td className="py-3 px-3.5 text-right tabular-nums text-[#18181B]">
                     {formatUSD(resumenPorPuesto.totalVentas)}
                   </td>
-                  <td className="py-2.5 px-3 text-right tabular-nums text-[#047857] font-mono">
+                  <td className="py-3 px-3.5 text-right tabular-nums text-[#047857]">
                     <div>({formatUSD(resumenPorPuesto.totalComision)})</div>
                     {resumenPorPuesto.totalYaPagado > 0 && (
-                      <div className="text-[10px] text-[#166534] font-normal font-sans">
+                      <div className="text-[10px] text-[#166534] font-normal">
                         Pagado: {formatUSD(resumenPorPuesto.totalYaPagado)}
                       </div>
                     )}
                   </td>
-                  <td className="py-2.5 px-3 text-right tabular-nums text-[#166534]">
+                  <td className="py-3 px-3.5 text-right tabular-nums text-[#1E3A3A]">
                     {formatUSD(resumenPorPuesto.totalNeto)}
                   </td>
-                  <td className="py-2.5 px-3"></td>
+                  <td className="py-3 px-3.5"></td>
                 </tr>
               </tfoot>
             </table>
           </div>
         </div>
 
-        {/* 3. RESUMEN DE INGRESOS POR MÉTODO DE PAGO */}
-        <div className="bg-white border border-[#E4E4E7] rounded-lg p-3 shadow-xs">
-          <span className="block text-xs font-bold text-[#18181B] uppercase tracking-wider mb-2 pb-1 border-b border-[#E4E4E7]">
+        {/* 3. VENTAS POR MÉTODO DE PAGO (2 columnas compactas) */}
+        <div className="bg-white border border-zinc-200/80 rounded-2xl p-4 shadow-xs">
+          <span className="block text-xs font-bold text-[#18181B] uppercase tracking-wider mb-3">
             Ventas por Método de Pago
           </span>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <div className="p-2 border border-[#E4E4E7] rounded bg-[#FAFAFA]">
-              <span className="block text-[11px] font-semibold text-[#52525B]">Pago Móvil</span>
-              <span className="block text-xs sm:text-sm font-bold text-[#166534] tabular-nums mt-0.5">
+          <div className="grid grid-cols-2 gap-2.5">
+            <div className="p-3 border border-zinc-100 rounded-xl bg-zinc-50/70">
+              <span className="block text-[11px] font-semibold text-zinc-500">Pago Móvil</span>
+              <span className="block text-sm font-bold text-[#166534] tabular-nums mt-0.5">
                 {formatUSD(ingresosPorMetodo.pago_movil.usd)}
               </span>
-              <span className="block text-[10px] text-zinc-400 tabular-nums">
+              <span className="block text-[10px] text-zinc-400 tabular-nums mt-0.5">
                 {formatVES(ingresosPorMetodo.pago_movil.bs)}
               </span>
             </div>
-            <div className="p-2 border border-[#E4E4E7] rounded bg-[#FAFAFA]">
-              <span className="block text-[11px] font-semibold text-[#52525B]">Punto de Venta</span>
-              <span className="block text-xs sm:text-sm font-bold text-[#166534] tabular-nums mt-0.5">
+
+            <div className="p-3 border border-zinc-100 rounded-xl bg-zinc-50/70">
+              <span className="block text-[11px] font-semibold text-zinc-500">Punto de Venta</span>
+              <span className="block text-sm font-bold text-[#166534] tabular-nums mt-0.5">
                 {formatUSD(ingresosPorMetodo.punto_venta.usd)}
               </span>
-              <span className="block text-[10px] text-zinc-400 tabular-nums">
+              <span className="block text-[10px] text-zinc-400 tabular-nums mt-0.5">
                 {formatVES(ingresosPorMetodo.punto_venta.bs)}
               </span>
             </div>
-            <div className="p-2 border border-[#E4E4E7] rounded bg-[#FAFAFA]">
-              <span className="block text-[11px] font-semibold text-[#52525B]">Efectivo Bs</span>
-              <span className="block text-xs sm:text-sm font-bold text-[#166534] tabular-nums mt-0.5">
+
+            <div className="p-3 border border-zinc-100 rounded-xl bg-zinc-50/70">
+              <span className="block text-[11px] font-semibold text-zinc-500">Efectivo Bs</span>
+              <span className="block text-sm font-bold text-[#166534] tabular-nums mt-0.5">
                 {formatUSD(ingresosPorMetodo.efectivo_bs.usd)}
               </span>
-              <span className="block text-[10px] text-zinc-400 tabular-nums">
+              <span className="block text-[10px] text-zinc-400 tabular-nums mt-0.5">
                 {formatVES(ingresosPorMetodo.efectivo_bs.bs)}
               </span>
             </div>
-            <div className="p-2 border border-[#E4E4E7] rounded bg-[#FAFAFA]">
-              <span className="block text-[11px] font-semibold text-[#52525B]">Divisa ($)</span>
-              <span className="block text-xs sm:text-sm font-bold text-[#166534] tabular-nums mt-0.5">
+
+            <div className="p-3 border border-zinc-100 rounded-xl bg-zinc-50/70">
+              <span className="block text-[11px] font-semibold text-zinc-500">Divisas ($)</span>
+              <span className="block text-sm font-bold text-[#166534] tabular-nums mt-0.5">
                 {formatUSD(ingresosPorMetodo.divisa.usd)}
               </span>
-              <span className="block text-[10px] text-zinc-400 tabular-nums">
+              <span className="block text-[10px] text-zinc-400 tabular-nums mt-0.5">
                 {formatVES(ingresosPorMetodo.divisa.bs)}
               </span>
             </div>
           </div>
         </div>
 
-        {/* 4. TABLA DETALLE DIARIO (Lunes a Domingo) */}
-        <div className="bg-white border border-[#E4E4E7] rounded-lg overflow-hidden shadow-xs">
-          <div className="bg-[#2C474E] text-white px-3.5 py-2 flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider">
-              Detalle Diario (Lunes a Domingo)
-            </span>
-            <span className="text-[11px] text-[#86EFAC] font-mono">7 Días</span>
-          </div>
+        {/* 4. ACORDEÓN 1: DETALLE DIARIO (Lunes a Domingo) */}
+        <div className="bg-white border border-zinc-200/80 rounded-2xl overflow-hidden shadow-xs">
+          <button
+            type="button"
+            onClick={() => setDetalleDiarioAbierto((prev) => !prev)}
+            className="w-full px-4 py-3.5 flex items-center justify-between text-left hover:bg-zinc-50/80 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-2">
+              <Calendar size={15} className="text-[#1E3A3A]" />
+              <span className="text-xs sm:text-sm font-bold text-[#18181B]">
+                Detalle Diario
+              </span>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <span
+                className={`text-xs font-bold tabular-nums ${
+                  balanceNetoUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
+                }`}
+              >
+                {balanceNetoUSD >= 0 ? '+' : ''}
+                {formatUSD(balanceNetoUSD)}
+              </span>
+              {detalleDiarioAbierto ? (
+                <ChevronUp size={16} className="text-zinc-400" />
+              ) : (
+                <ChevronDown size={16} className="text-zinc-400" />
+              )}
+            </div>
+          </button>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left">
-              <thead>
-                <tr className="bg-[#FAFAFA] border-b border-[#E4E4E7] text-[#52525B] font-bold">
-                  <th className="py-2 px-2.5 sticky left-0 bg-[#FAFAFA] z-10 border-r border-[#E4E4E7]">
-                    Día
-                  </th>
-                  <th className="py-2 px-2 text-right">Ingresos (Bs)</th>
-                  <th className="py-2 px-2 text-right text-[#166534]">Ingresos ($)</th>
-                  <th className="py-2 px-2 text-right">Gastos (Bs)</th>
-                  <th className="py-2 px-2 text-right text-[#991B1B]">Gastos ($)</th>
-                  <th className="py-2 px-2.5 text-right font-black">Balance ($)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E4E4E7]">
-                {detalleDiario.map((d) => (
-                  <tr key={d.fecha} className="hover:bg-zinc-50 transition-colors">
-                    <td className="py-2 px-2.5 font-bold sticky left-0 bg-white z-10 border-r border-[#E4E4E7] whitespace-nowrap">
-                      {d.dia} <span className="text-[10px] font-normal text-zinc-400">({d.fecha.slice(5)})</span>
-                    </td>
-                    <td className="py-2 px-2 text-right tabular-nums text-zinc-600">
-                      {formatNumber(d.ingresosBs)}
-                    </td>
-                    <td className="py-2 px-2 text-right tabular-nums font-bold text-[#166534]">
-                      {formatUSD(d.ingresosUSD)}
-                    </td>
-                    <td className="py-2 px-2 text-right tabular-nums text-zinc-600">
-                      {formatNumber(d.gastosBs)}
-                    </td>
-                    <td className="py-2 px-2 text-right tabular-nums font-bold text-[#991B1B]">
-                      {formatUSD(d.gastosUSD)}
-                    </td>
-                    <td
-                      className={`py-2 px-2.5 text-right tabular-nums font-bold ${
-                        d.balanceUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
-                      }`}
-                    >
-                      {d.balanceUSD >= 0 ? '+' : ''}
-                      {formatUSD(d.balanceUSD)}
-                    </td>
+          {detalleDiarioAbierto && (
+            <div className="overflow-x-auto border-t border-zinc-100">
+              <table className="w-full text-xs text-left">
+                <thead>
+                  <tr className="bg-zinc-50/80 border-b border-zinc-100 text-zinc-500 font-semibold">
+                    <th className="py-2.5 px-3 sticky left-0 bg-zinc-50/80 z-10 border-r border-zinc-100">
+                      Día
+                    </th>
+                    <th className="py-2.5 px-2.5 text-right">Ingresos (Bs)</th>
+                    <th className="py-2.5 px-2.5 text-right text-[#166534]">Ingresos ($)</th>
+                    <th className="py-2.5 px-2.5 text-right">Gastos (Bs)</th>
+                    <th className="py-2.5 px-2.5 text-right text-[#991B1B]">Gastos ($)</th>
+                    <th className="py-2.5 px-3 text-right font-bold">Balance ($)</th>
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="bg-zinc-100 font-bold border-t-2 border-[#2C474E] text-[#18181B]">
-                  <td className="py-2.5 px-2.5 sticky left-0 bg-zinc-100 z-10 border-r border-[#E4E4E7]">
-                    TOTAL
-                  </td>
-                  <td className="py-2.5 px-2 text-right tabular-nums">{formatNumber(totalIngresosBs)}</td>
-                  <td className="py-2.5 px-2 text-right tabular-nums text-[#166534]">
-                    {formatUSD(totalIngresosUSD)}
-                  </td>
-                  <td className="py-2.5 px-2 text-right tabular-nums">{formatNumber(totalGastosBs)}</td>
-                  <td className="py-2.5 px-2 text-right tabular-nums text-[#991B1B]">
-                    {formatUSD(totalGastosUSD)}
-                  </td>
-                  <td
-                    className={`py-2.5 px-2.5 text-right tabular-nums font-black ${
-                      balanceNetoUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
-                    }`}
-                  >
-                    {balanceNetoUSD >= 0 ? '+' : ''}
-                    {formatUSD(balanceNetoUSD)}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-
-        {/* 5. TABLA RESUMEN DE GASTOS POR CATEGORÍA Y NATURALEZA */}
-        <div className="bg-white border border-[#E4E4E7] rounded-lg overflow-hidden shadow-xs">
-          <div className="bg-[#2C474E] text-white px-3.5 py-2 flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider">
-              Gastos por Categoría y Naturaleza
-            </span>
-            <span className="text-[11px] text-[#86EFAC] font-mono">
-              Total: {formatUSD(totalGastosUSD)}
-            </span>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left">
-              <thead>
-                <tr className="bg-[#FAFAFA] border-b border-[#E4E4E7] text-[#52525B] font-bold">
-                  <th className="py-2 px-2.5 sticky left-0 bg-[#FAFAFA] z-10 border-r border-[#E4E4E7]">
-                    Categoría
-                  </th>
-                  <th className="py-2 px-2 text-center">Naturaleza</th>
-                  <th className="py-2 px-2 text-right">Pago Móvil</th>
-                  <th className="py-2 px-2 text-right">Efectivo</th>
-                  <th className="py-2 px-2 text-right">Total Bs</th>
-                  <th className="py-2 px-2.5 text-right text-[#991B1B]">Total ($)</th>
-                  <th className="py-2 px-2 text-right">% Gasto</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E4E4E7]">
-                {resumenCategorias.map((c) => {
-                  const pct = totalGastosUSD > 0 ? (c.totalUSD / totalGastosUSD) * 100 : 0;
-                  return (
-                    <tr key={c.categoria} className="hover:bg-zinc-50 transition-colors">
-                      <td className="py-2 px-2.5 font-bold text-[#18181B] sticky left-0 bg-white z-10 border-r border-[#E4E4E7] whitespace-nowrap">
-                        {c.categoria}
+                </thead>
+                <tbody className="divide-y divide-zinc-100">
+                  {detalleDiario.map((d) => (
+                    <tr key={d.fecha} className="hover:bg-zinc-50/60 transition-colors">
+                      <td className="py-2.5 px-3 font-semibold sticky left-0 bg-white z-10 border-r border-zinc-100 whitespace-nowrap">
+                        {d.dia}{' '}
+                        <span className="text-[10px] font-normal text-zinc-400">
+                          ({d.fecha.slice(5)})
+                        </span>
                       </td>
-                      <td className="py-2 px-2 text-center">
-                        <BadgeNaturaleza naturaleza={c.naturaleza} tipo="gasto" />
+                      <td className="py-2.5 px-2.5 text-right tabular-nums text-zinc-500">
+                        {formatNumber(d.ingresosBs)}
                       </td>
-                      <td className="py-2 px-2 text-right tabular-nums text-zinc-600">
-                        {formatNumber(c.pagoMovilBs)}
+                      <td className="py-2.5 px-2.5 text-right tabular-nums font-bold text-[#166534]">
+                        {formatUSD(d.ingresosUSD)}
                       </td>
-                      <td className="py-2 px-2 text-right tabular-nums text-zinc-600">
-                        {formatNumber(c.efectivoBs)}
+                      <td className="py-2.5 px-2.5 text-right tabular-nums text-zinc-500">
+                        {formatNumber(d.gastosBs)}
                       </td>
-                      <td className="py-2 px-2 text-right tabular-nums font-semibold text-[#18181B]">
-                        {formatNumber(c.totalBs)}
+                      <td className="py-2.5 px-2.5 text-right tabular-nums font-bold text-[#991B1B]">
+                        {formatUSD(d.gastosUSD)}
                       </td>
-                      <td className="py-2 px-2.5 text-right tabular-nums font-bold text-[#991B1B]">
-                        {formatUSD(c.totalUSD)}
-                      </td>
-                      <td className="py-2 px-2 text-right tabular-nums text-zinc-500 font-medium">
-                        {formatPorcentaje(pct)}
+                      <td
+                        className={`py-2.5 px-3 text-right tabular-nums font-bold ${
+                          d.balanceUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
+                        }`}
+                      >
+                        {d.balanceUSD >= 0 ? '+' : ''}
+                        {formatUSD(d.balanceUSD)}
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="bg-zinc-100 font-bold border-t-2 border-[#2C474E] text-[#18181B]">
-                  <td className="py-2.5 px-2.5 sticky left-0 bg-zinc-100 z-10 border-r border-[#E4E4E7]">
-                    TOTAL GASTOS
-                  </td>
-                  <td className="py-2.5 px-2 text-center text-[10px] text-zinc-500">
-                    {totalGastosItemsCount} items
-                  </td>
-                  <td className="py-2.5 px-2 text-right tabular-nums">
-                    {formatNumber(resumenCategorias.reduce((a, b) => a + b.pagoMovilBs, 0))}
-                  </td>
-                  <td className="py-2.5 px-2 text-right tabular-nums">
-                    {formatNumber(resumenCategorias.reduce((a, b) => a + b.efectivoBs, 0))}
-                  </td>
-                  <td className="py-2.5 px-2 text-right tabular-nums">{formatNumber(totalGastosBs)}</td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums text-[#991B1B]">
-                    {formatUSD(totalGastosUSD)}
-                  </td>
-                  <td className="py-2.5 px-2 text-right tabular-nums">100.0%</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-
-        {/* 6. TABLA DESGLOSE POR NATURALEZA (Gastos vs Personal) */}
-        <div className="bg-white border border-[#E4E4E7] rounded-lg overflow-hidden shadow-xs">
-          <div className="bg-[#2C474E] text-white px-3.5 py-2 flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider">
-              Desglose por Naturaleza (Gastos vs Personal)
-            </span>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left">
-              <thead>
-                <tr className="bg-[#FAFAFA] border-b border-[#E4E4E7] text-[#52525B] font-bold">
-                  <th className="py-2 px-2.5 sticky left-0 bg-[#FAFAFA] z-10 border-r border-[#E4E4E7]">
-                    Naturaleza
-                  </th>
-                  <th className="py-2 px-2.5 text-right">Total (Bs)</th>
-                  <th className="py-2 px-2.5 text-right text-[#991B1B]">Total ($)</th>
-                  <th className="py-2 px-2.5 text-right">% Gasto</th>
-                  <th className="py-2 px-2.5 text-right">Impacto s/ Ventas</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E4E4E7]">
-                {desgloseNaturaleza.map((n) => (
-                  <tr key={n.naturaleza} className="hover:bg-zinc-50 transition-colors">
-                    <td className="py-2 px-2.5 font-bold sticky left-0 bg-white z-10 border-r border-[#E4E4E7]">
-                      <BadgeNaturaleza naturaleza={n.naturaleza} tipo="gasto" />
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-zinc-50 font-bold border-t border-zinc-200 text-[#18181B]">
+                    <td className="py-2.5 px-3 sticky left-0 bg-zinc-50 z-10 border-r border-zinc-100">
+                      TOTAL
                     </td>
-                    <td className="py-2 px-2.5 text-right tabular-nums text-zinc-600">
-                      {formatNumber(n.totalBs)}
+                    <td className="py-2.5 px-2.5 text-right tabular-nums">
+                      {formatNumber(totalIngresosBs)}
                     </td>
-                    <td className="py-2 px-2.5 text-right tabular-nums font-bold text-[#991B1B]">
-                      {formatUSD(n.totalUSD)}
+                    <td className="py-2.5 px-2.5 text-right tabular-nums text-[#166534]">
+                      {formatUSD(totalIngresosUSD)}
                     </td>
-                    <td className="py-2 px-2.5 text-right tabular-nums font-semibold text-[#52525B]">
-                      {formatPorcentaje(n.porcGasto)}
+                    <td className="py-2.5 px-2.5 text-right tabular-nums">
+                      {formatNumber(totalGastosBs)}
                     </td>
-                    <td className="py-2 px-2.5 text-right tabular-nums font-bold text-[#18181B]">
-                      {formatPorcentaje(n.impactoIngresos)}
+                    <td className="py-2.5 px-2.5 text-right tabular-nums text-[#991B1B]">
+                      {formatUSD(totalGastosUSD)}
+                    </td>
+                    <td
+                      className={`py-2.5 px-3 text-right tabular-nums font-black ${
+                        balanceNetoUSD >= 0 ? 'text-[#166534]' : 'text-[#991B1B]'
+                      }`}
+                    >
+                      {balanceNetoUSD >= 0 ? '+' : ''}
+                      {formatUSD(balanceNetoUSD)}
                     </td>
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="bg-zinc-100 font-bold border-t-2 border-[#2C474E] text-[#18181B]">
-                  <td className="py-2.5 px-2.5 sticky left-0 bg-zinc-100 z-10 border-r border-[#E4E4E7]">
-                    TOTAL
-                  </td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums">{formatNumber(totalGastosBs)}</td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums text-[#991B1B]">
-                    {formatUSD(totalGastosUSD)}
-                  </td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums">100.0%</td>
-                  <td className="py-2.5 px-2.5 text-right tabular-nums">
-                    {totalIngresosUSD > 0
-                      ? formatPorcentaje((totalGastosUSD / totalIngresosUSD) * 100)
-                      : '0.0%'}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+                </tfoot>
+              </table>
+            </div>
+          )}
         </div>
 
-        {/* 7. GRÁFICOS (RECHARTS RESPONSIVOS CON COLORES SÓLIDOS CORPORATIVOS) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Gráfico 1: Barras agrupadas Ingresos vs Gastos Diarios ($ USD) */}
-          <div className="bg-white border border-[#E4E4E7] rounded-lg p-3 shadow-xs">
-            <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-[#E4E4E7]">
-              <BarChart2 size={15} className="text-[#2C474E]" />
-              <span className="text-xs font-bold text-[#18181B]">
-                Ingresos vs Gastos Diarios ($ USD)
+        {/* 5. ACORDEÓN 2: GASTOS POR CATEGORÍA (solo categorías con monto > 0) */}
+        <div className="bg-white border border-zinc-200/80 rounded-2xl overflow-hidden shadow-xs">
+          <button
+            type="button"
+            onClick={() => setCategoriasAbierto((prev) => !prev)}
+            className="w-full px-4 py-3.5 flex items-center justify-between text-left hover:bg-zinc-50/80 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-2">
+              <TrendingDown size={15} className="text-[#991B1B]" />
+              <span className="text-xs sm:text-sm font-bold text-[#18181B]">
+                Gastos por Categoría
+              </span>
+              <span className="text-[10px] font-semibold text-zinc-400 bg-zinc-100 px-1.5 py-0.5 rounded-full">
+                {categoriasVisibles.length}
               </span>
             </div>
-            <div className="h-56 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={datosGraficoBarras} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E4E4E7" />
-                  <XAxis dataKey="dia" tick={{ fontSize: 11, fill: '#52525B' }} />
-                  <YAxis tick={{ fontSize: 10, fill: '#52525B' }} />
-                  <Tooltip
-                    formatter={(val: any) => [`$${formatNumber(Number(val))}`, '']}
-                    contentStyle={{
-                      backgroundColor: '#FFFFFF',
-                      borderColor: '#E4E4E7',
-                      fontSize: '11px',
-                      borderRadius: '6px',
-                    }}
-                  />
-                  <Legend
-                    wrapperStyle={{ fontSize: '11px', paddingTop: '6px' }}
-                    iconType="rect"
-                  />
-                  <Bar dataKey="Ingresos" fill="#2C474E" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="Gastos" fill="#B91C1C" radius={[2, 2, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="flex items-center gap-2.5">
+              <span className="text-xs font-bold tabular-nums text-[#991B1B]">
+                {formatUSD(totalGastosUSD)}
+              </span>
+              {categoriasAbierto ? (
+                <ChevronUp size={16} className="text-zinc-400" />
+              ) : (
+                <ChevronDown size={16} className="text-zinc-400" />
+              )}
             </div>
-          </div>
+          </button>
 
-          {/* Gráfico 2: Circular Distribución de Gastos por Categoría */}
-          <div className="bg-white border border-[#E4E4E7] rounded-lg p-3 shadow-xs">
-            <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-[#E4E4E7]">
-              <PieIcon size={15} className="text-[#2C474E]" />
-              <span className="text-xs font-bold text-[#18181B]">
-                Distribución de Gastos por Categoría
+          {categoriasAbierto && (
+            <div className="border-t border-zinc-100">
+              {categoriasVisibles.length === 0 ? (
+                <div className="p-6 text-center text-xs text-zinc-400">
+                  No hay gastos registrados en esta semana.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left">
+                    <thead>
+                      <tr className="bg-zinc-50/80 border-b border-zinc-100 text-zinc-500 font-semibold">
+                        <th className="py-2.5 px-3 sticky left-0 bg-zinc-50/80 z-10 border-r border-zinc-100">
+                          Categoría
+                        </th>
+                        <th className="py-2.5 px-2.5 text-center">Naturaleza</th>
+                        <th className="py-2.5 px-2.5 text-right">Total Bs</th>
+                        <th className="py-2.5 px-3 text-right text-[#991B1B]">Total ($)</th>
+                        <th className="py-2.5 px-2.5 text-right">%</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100">
+                      {categoriasVisibles.map((c) => {
+                        const pct = totalGastosUSD > 0 ? (c.totalUSD / totalGastosUSD) * 100 : 0;
+                        return (
+                          <tr key={c.categoria} className="hover:bg-zinc-50/60 transition-colors">
+                            <td className="py-2.5 px-3 font-semibold text-[#18181B] sticky left-0 bg-white z-10 border-r border-zinc-100 whitespace-nowrap">
+                              {c.categoria}
+                            </td>
+                            <td className="py-2.5 px-2.5 text-center">
+                              <BadgeNaturaleza naturaleza={c.naturaleza} tipo="gasto" />
+                            </td>
+                            <td className="py-2.5 px-2.5 text-right tabular-nums text-zinc-600">
+                              {formatNumber(c.totalBs)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums font-bold text-[#991B1B]">
+                              {formatUSD(c.totalUSD)}
+                            </td>
+                            <td className="py-2.5 px-2.5 text-right tabular-nums text-zinc-500">
+                              {formatPorcentaje(pct)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-zinc-50 font-bold border-t border-zinc-200 text-[#18181B]">
+                        <td className="py-2.5 px-3 sticky left-0 bg-zinc-50 z-10 border-r border-zinc-100">
+                          TOTAL
+                        </td>
+                        <td className="py-2.5 px-2.5 text-center text-[10px] text-zinc-400">
+                          {totalGastosItemsCount} movs
+                        </td>
+                        <td className="py-2.5 px-2.5 text-right tabular-nums">
+                          {formatNumber(totalGastosBs)}
+                        </td>
+                        <td className="py-2.5 px-3 text-right tabular-nums text-[#991B1B]">
+                          {formatUSD(totalGastosUSD)}
+                        </td>
+                        <td className="py-2.5 px-2.5 text-right tabular-nums">100.0%</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 6. ACORDEÓN 3: GRÁFICOS */}
+        <div className="bg-white border border-zinc-200/80 rounded-2xl overflow-hidden shadow-xs">
+          <button
+            type="button"
+            onClick={() => setGraficosAbierto((prev) => !prev)}
+            className="w-full px-4 py-3.5 flex items-center justify-between text-left hover:bg-zinc-50/80 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-2">
+              <PieIcon size={15} className="text-[#1E3A3A]" />
+              <span className="text-xs sm:text-sm font-bold text-[#18181B]">
+                Gráficos y Distribución
               </span>
             </div>
-            {datosGraficoCircular.length === 0 ? (
-              <div className="h-56 flex items-center justify-center text-xs text-[#52525B]">
-                No hay gastos registrados en esta semana.
+            <div className="flex items-center gap-2.5">
+              <span className="text-[11px] font-medium text-zinc-400">
+                Barras y Dona
+              </span>
+              {graficosAbierto ? (
+                <ChevronUp size={16} className="text-zinc-400" />
+              ) : (
+                <ChevronDown size={16} className="text-zinc-400" />
+              )}
+            </div>
+          </button>
+
+          {graficosAbierto && (
+            <div className="p-3.5 border-t border-zinc-100 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Gráfico 1: Barras agrupadas Ingresos vs Gastos Diarios ($ USD) */}
+              <div className="border border-zinc-100 rounded-xl p-3 bg-zinc-50/40">
+                <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-zinc-100">
+                  <BarChart2 size={14} className="text-[#1E3A3A]" />
+                  <span className="text-xs font-bold text-[#18181B]">
+                    Ingresos vs Gastos Diarios ($ USD)
+                  </span>
+                </div>
+                <div className="h-56 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={datosGraficoBarras} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E4E4E7" />
+                      <XAxis dataKey="dia" tick={{ fontSize: 11, fill: '#52525B' }} />
+                      <YAxis tick={{ fontSize: 10, fill: '#52525B' }} />
+                      <Tooltip
+                        formatter={(val: any) => [`$${formatNumber(Number(val))}`, '']}
+                        contentStyle={{
+                          backgroundColor: '#FFFFFF',
+                          borderColor: '#E4E4E7',
+                          fontSize: '11px',
+                          borderRadius: '8px',
+                        }}
+                      />
+                      <Legend
+                        wrapperStyle={{ fontSize: '11px', paddingTop: '6px' }}
+                        iconType="rect"
+                      />
+                      <Bar dataKey="Ingresos" fill="#1E3A3A" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="Gastos" fill="#B91C1C" radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
-            ) : (
-              <div className="h-56 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
-                    <Pie
-                      data={datosGraficoCircular}
-                      cx="50%"
-                      cy="45%"
-                      innerRadius={38}
-                      outerRadius={68}
-                      paddingAngle={2}
-                      dataKey="value"
-                    >
-                      {datosGraficoCircular.map((_, index) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={COLORES_PIE[index % COLORES_PIE.length]}
+
+              {/* Gráfico 2: Circular Dona Distribución de Gastos por Categoría */}
+              <div className="border border-zinc-100 rounded-xl p-3 bg-zinc-50/40">
+                <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-zinc-100">
+                  <PieIcon size={14} className="text-[#1E3A3A]" />
+                  <span className="text-xs font-bold text-[#18181B]">
+                    Distribución de Gastos por Categoría
+                  </span>
+                </div>
+                {datosGraficoCircular.length === 0 ? (
+                  <div className="h-56 flex items-center justify-center text-xs text-zinc-400">
+                    No hay gastos registrados en esta semana.
+                  </div>
+                ) : (
+                  <div className="h-56 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+                        <Pie
+                          data={datosGraficoCircular}
+                          cx="50%"
+                          cy="45%"
+                          innerRadius={40}
+                          outerRadius={70}
+                          paddingAngle={2}
+                          dataKey="value"
+                        >
+                          {datosGraficoCircular.map((_, index) => (
+                            <Cell
+                              key={`cell-${index}`}
+                              fill={COLORES_PIE[index % COLORES_PIE.length]}
+                            />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          formatter={(val: any) => [`$${formatNumber(Number(val))}`, '']}
+                          contentStyle={{
+                            backgroundColor: '#FFFFFF',
+                            borderColor: '#E4E4E7',
+                            fontSize: '11px',
+                            borderRadius: '8px',
+                          }}
                         />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      formatter={(val: any) => [`$${formatNumber(Number(val))}`, '']}
-                      contentStyle={{
-                        backgroundColor: '#FFFFFF',
-                        borderColor: '#E4E4E7',
-                        fontSize: '11px',
-                        borderRadius: '6px',
-                      }}
-                    />
-                    <Legend
-                      wrapperStyle={{
-                        fontSize: '10px',
-                        lineHeight: '14px',
-                        maxHeight: '48px',
-                        overflowY: 'auto',
-                      }}
-                      iconType="circle"
-                      iconSize={8}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
+                        <Legend
+                          wrapperStyle={{
+                            fontSize: '10px',
+                            lineHeight: '14px',
+                            maxHeight: '48px',
+                            overflowY: 'auto',
+                          }}
+                          iconType="circle"
+                          iconSize={8}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
         </>
