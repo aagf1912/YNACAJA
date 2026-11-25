@@ -44,6 +44,7 @@ import { CajaDisponibleCard } from '../components/CajaDisponibleCard';
 import { ModalSaldoInicial } from '../components/ModalSaldoInicial';
 import { ModalTransferenciaCaja } from '../components/ModalTransferenciaCaja';
 import { ResumenMensualView } from '../components/ResumenMensualView';
+import { generarYDescargarExcel } from '../utils/exportExcel';
 
 interface Props {
   movimientos: Movimiento[];
@@ -126,6 +127,7 @@ export const BalanceView: React.FC<Props> = ({
 }) => {
   const reportRef = useRef<HTMLDivElement>(null);
   const [compartiendo, setCompartiendo] = useState(false);
+  const [exportandoExcel, setExportandoExcel] = useState(false);
   const [filtroPuesto, setFiltroPuesto] = useState<string>('todos');
 
   // Modo de período: 'semanal' o 'mensual'
@@ -825,59 +827,79 @@ export const BalanceView: React.FC<Props> = ({
     setFechaSemana((prev) => shiftSemana(prev, 1));
   };
 
-  // Exportar Excel (CSV con UTF-8 BOM)
-  const exportarCSV = () => {
-    const BOM = '\uFEFF';
-    let csv = `${BOM}"BALANCE SEMANAL COMPLETO — CHICHA ADICTIVA"\n`;
-    csv += `"Período:","${rangoTexto}"\n`;
-    csv += `"Filtro Puesto:","${nombreFiltroPuesto}"\n\n`;
+  // Exportar Excel nativo (.xlsx) sincronizado con los filtros activos
+  const handleExportarExcel = async () => {
+    if (exportandoExcel) return;
+    try {
+      setExportandoExcel(true);
 
-    // Resumen KPI
-    csv += `"TOTAL INGRESOS ($)","${totalIngresosUSD.toFixed(2)}","Bs","${totalIngresosBs.toFixed(2)}"\n`;
-    csv += `"TOTAL GASTOS ($)","${totalGastosUSD.toFixed(2)}","Bs","${totalGastosBs.toFixed(2)}"\n`;
-    csv += `"BALANCE NETO ($)","${balanceNetoUSD.toFixed(2)}","Bs","${balanceNetoBs.toFixed(2)}"\n\n`;
+      if (periodo === 'semanal') {
+        const comisionesFiltradas =
+          filtroPuesto === 'todos'
+            ? movimientosComisionSemana
+            : movimientosComisionSemana.filter((m) => m.puesto_id === filtroPuesto);
 
-    // Resumen por Puesto
-    csv += `"RESUMEN POR PUESTO DE VENTA (VENTAS Y COMISIONES)"\n`;
-    csv += `"Puesto","Cant. Ventas","Total Ventas ($)","Comisión Vendedores ($)","Neto Negocio ($)"\n`;
-    for (const p of resumenPorPuesto.items) {
-      csv += `"${p.nombre}","${p.ventasCount}","${p.totalUSD.toFixed(2)}","(${p.comisionUSD.toFixed(2)})","${p.netoUSD.toFixed(2)}"\n`;
+        await generarYDescargarExcel({
+          modoPeriodo: 'semanal',
+          periodoTexto: rangoTexto,
+          nombreArchivo: `Balance_Chicha_Adictiva_${infoSemana.semanaInicio}_al_${infoSemana.semanaFin}.xlsx`,
+          nombreFiltroPuesto,
+          filtroPuestoId: filtroPuesto,
+          tasaBcv: tasaActual,
+          movimientosFiltrados: movimientosSemanaFiltrados,
+          movimientosComisionPeriodo: comisionesFiltradas,
+          puestos,
+        });
+      } else {
+        const MESES = [
+          'Enero',
+          'Febrero',
+          'Marzo',
+          'Abril',
+          'Mayo',
+          'Junio',
+          'Julio',
+          'Agosto',
+          'Septiembre',
+          'Octubre',
+          'Noviembre',
+          'Diciembre',
+        ];
+        const mesIdx = fechaMes.getMonth();
+        const anoSel = fechaMes.getFullYear();
+        const mesNom = MESES[mesIdx];
+        const mesTxt = `${mesNom} ${anoSel}`;
+        const prefijo = `${anoSel}-${String(mesIdx + 1).padStart(2, '0')}`;
+
+        const base = movimientosHistoricos.length > 0 ? movimientosHistoricos : movimientos;
+        const movsMes = base.filter((m) => m.fecha && m.fecha.startsWith(prefijo));
+        const movsFiltrados =
+          filtroPuesto === 'todos' ? movsMes : movsMes.filter((m) => m.puesto_id === filtroPuesto);
+
+        const comisionesMes = movsFiltrados.filter(
+          (m) =>
+            m.tipo === 'gasto' &&
+            (m.categoria === 'Sueldos / Comisiones' || m.categoria === 'Nómina / Sueldos')
+        );
+
+        await generarYDescargarExcel({
+          modoPeriodo: 'mensual',
+          periodoTexto: mesTxt,
+          nombreArchivo: `Balance_Mensual_${mesNom}_${anoSel}.xlsx`,
+          nombreFiltroPuesto,
+          filtroPuestoId: filtroPuesto,
+          tasaBcv: tasaActual,
+          movimientosFiltrados: movsFiltrados,
+          movimientosComisionPeriodo: comisionesMes,
+          puestos,
+        });
+      }
+    } catch (err) {
+      console.error('Error exportando Excel (.xlsx):', err);
+      alert('No se pudo generar el archivo Excel (.xlsx).');
+    } finally {
+      setExportandoExcel(false);
     }
-    csv += `"TOTAL PUESTOS","${resumenPorPuesto.items.reduce((a, b) => a + b.ventasCount, 0)}","${resumenPorPuesto.totalVentas.toFixed(2)}","(${resumenPorPuesto.totalComision.toFixed(2)})","${resumenPorPuesto.totalNeto.toFixed(2)}"\n\n`;
-
-    // Tabla: Detalle Diario
-    csv += `"DETALLE DIARIO (LUNES A DOMINGO)"\n`;
-    csv += `"Fecha","Día","Ingresos (Bs)","Ingresos ($)","Gastos (Bs)","Gastos ($)","Balance Día (Bs)","Balance Día ($)"\n`;
-    for (const d of detalleDiario) {
-      csv += `"${d.fecha}","${d.dia}","${d.ingresosBs.toFixed(2)}","${d.ingresosUSD.toFixed(2)}","${d.gastosBs.toFixed(2)}","${d.gastosUSD.toFixed(2)}","${d.balanceBs.toFixed(2)}","${d.balanceUSD.toFixed(2)}"\n`;
-    }
-    csv += `"TOTAL SEMANA","7 días","${totalIngresosBs.toFixed(2)}","${totalIngresosUSD.toFixed(2)}","${totalGastosBs.toFixed(2)}","${totalGastosUSD.toFixed(2)}","${balanceNetoBs.toFixed(2)}","${balanceNetoUSD.toFixed(2)}"\n\n`;
-
-    // Tabla: Resumen de Gastos por Categoría
-    csv += `"RESUMEN DE GASTOS POR CATEGORÍA Y NATURALEZA"\n`;
-    csv += `"Categoría","Naturaleza","Pago Móvil (Bs)","Efectivo (Bs)","Punto / Divisa (Bs)","Total (Bs)","Total ($)","% del Gasto"\n`;
-    for (const c of resumenCategorias) {
-      const pct = totalGastosUSD > 0 ? (c.totalUSD / totalGastosUSD) * 100 : 0;
-      csv += `"${c.categoria}","${c.naturaleza}","${c.pagoMovilBs.toFixed(2)}","${c.efectivoBs.toFixed(2)}","${c.puntoDivisaBs.toFixed(2)}","${c.totalBs.toFixed(2)}","${c.totalUSD.toFixed(2)}","${pct.toFixed(1)}%"\n`;
-    }
-    csv += `"TOTAL GASTOS","${totalGastosItemsCount} items","","","","${totalGastosBs.toFixed(2)}","${totalGastosUSD.toFixed(2)}","100.0%"\n\n`;
-
-    // Tabla: Desglose por Naturaleza
-    csv += `"DESGLOSE POR NATURALEZA DEL GASTO (OPERATIVO VS PERSONAL)"\n`;
-    csv += `"Naturaleza","Total (Bs)","Total ($)","% del Gasto","Impacto sobre Ingresos"\n`;
-    for (const n of desgloseNaturaleza) {
-      csv += `"${n.naturaleza}","${n.totalBs.toFixed(2)}","${n.totalUSD.toFixed(2)}","${n.porcGasto.toFixed(1)}%","${n.impactoIngresos.toFixed(1)}%"\n`;
-    }
-    csv += `"TOTAL","${totalGastosBs.toFixed(2)}","${totalGastosUSD.toFixed(2)}","100.0%","${totalIngresosUSD > 0 ? ((totalGastosUSD / totalIngresosUSD) * 100).toFixed(1) : '0.0'}%"\n`;
-
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `Balance_Chicha_Adictiva_${diasSemana[0].fechaStr}_al_${diasSemana[6].fechaStr}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
   // Compartir Imagen con html-to-image y Capacitor Share
@@ -923,109 +945,6 @@ export const BalanceView: React.FC<Props> = ({
     } finally {
       setCompartiendo(false);
     }
-  };
-
-  // Exportar reporte mensual y resumen anual en CSV
-  const exportarCSVMensual = () => {
-    const MESES = [
-      'Enero',
-      'Febrero',
-      'Marzo',
-      'Abril',
-      'Mayo',
-      'Junio',
-      'Julio',
-      'Agosto',
-      'Septiembre',
-      'Octubre',
-      'Noviembre',
-      'Diciembre',
-    ];
-    const mesIdx = fechaMes.getMonth();
-    const anoSel = fechaMes.getFullYear();
-    const mesNom = MESES[mesIdx];
-    const mesTxt = `${mesNom} ${anoSel}`;
-
-    const prefijo = `${anoSel}-${String(mesIdx + 1).padStart(2, '0')}`;
-    const base = movimientosHistoricos.length > 0 ? movimientosHistoricos : movimientos;
-    const movsMes = base.filter((m) => m.fecha && m.fecha.startsWith(prefijo));
-    const movsFiltrados =
-      filtroPuesto === 'todos' ? movsMes : movsMes.filter((m) => m.puesto_id === filtroPuesto);
-
-    let ingUSD = 0,
-      ingBs = 0,
-      gasUSD = 0,
-      gasBs = 0,
-      retUSD = 0,
-      retBs = 0;
-    for (const m of movsFiltrados) {
-      const { monto_usd, monto_bs } = calcularMontos(m);
-      if (m.tipo === 'venta' || m.tipo === 'ingreso') {
-        ingUSD += monto_usd;
-        ingBs += monto_bs;
-      } else {
-        if (m.naturaleza === 'Personal') {
-          retUSD += monto_usd;
-          retBs += monto_bs;
-        } else {
-          gasUSD += monto_usd;
-          gasBs += monto_bs;
-        }
-      }
-    }
-
-    let csv = `\uFEFF`;
-    csv += `"REPORTE MENSUAL Y RESUMEN ANUAL — CHICHA ADICTIVA"\n`;
-    csv += `"Mes Seleccionado:","${mesTxt}"\n`;
-    csv += `"Puesto de Venta:","${nombreFiltroPuesto}"\n`;
-    csv += `"Tasa Oficial BCV:","${tasaActual} Bs/$"\n\n`;
-
-    const gUSD = ingUSD - gasUSD - retUSD;
-    const gBs = ingBs - gasBs - retBs;
-    const gananciaNetaUSD = Math.abs(gUSD) < 0.005 || Object.is(gUSD, -0) ? 0 : gUSD;
-    const gananciaNetaBs = Math.abs(gBs) < 0.005 || Object.is(gBs, -0) ? 0 : gBs;
-
-    csv += `"RESUMEN DEL MES (${mesTxt})"\n`;
-    csv += `"Concepto","Monto ($ USD)","Monto (Bs)"\n`;
-    csv += `"Total Ingresos","${ingUSD.toFixed(2)}","${ingBs.toFixed(2)}"\n`;
-    csv += `"Gastos Operativos (Negocio)","${gasUSD.toFixed(2)}","${gasBs.toFixed(2)}"\n`;
-    csv += `"Retiros Personales","${retUSD.toFixed(2)}","${retBs.toFixed(2)}"\n`;
-    csv += `"Ganancia Neta","${gananciaNetaUSD.toFixed(2)}","${gananciaNetaBs.toFixed(2)}"\n\n`;
-
-    csv += `"RESUMEN ANUAL (${anoSel}) — ENERO A DICIEMBRE"\n`;
-    csv += `"Mes","Ingresos ($)","Gastos Operativos ($)","Retiros Personales ($)","Balance Neto ($)"\n`;
-
-    let totIng = 0,
-      totGas = 0,
-      totRet = 0;
-    const filteredBase =
-      filtroPuesto === 'todos' ? base : base.filter((m) => m.puesto_id === filtroPuesto);
-
-    for (let i = 0; i < 12; i++) {
-      const pref = `${anoSel}-${String(i + 1).padStart(2, '0')}`;
-      const mMes = filteredBase.filter((m) => m.fecha && m.fecha.startsWith(pref));
-      let mIng = 0,
-        mGas = 0,
-        mRet = 0;
-      for (const m of mMes) {
-        const { monto_usd } = calcularMontos(m);
-        if (m.tipo === 'venta' || m.tipo === 'ingreso') mIng += monto_usd;
-        else if (m.naturaleza === 'Personal') mRet += monto_usd;
-        else mGas += monto_usd;
-      }
-      totIng += mIng;
-      totGas += mGas;
-      totRet += mRet;
-      csv += `"${MESES[i]}","${mIng.toFixed(2)}","${mGas.toFixed(2)}","${mRet.toFixed(2)}","${(mIng - mGas - mRet).toFixed(2)}"\n`;
-    }
-    csv += `"TOTAL ANUAL ${anoSel}","${totIng.toFixed(2)}","${totGas.toFixed(2)}","${totRet.toFixed(2)}","${(totIng - totGas - totRet).toFixed(2)}"\n`;
-
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `Balance_Mensual_${mesNom}_${anoSel}.csv`;
-    link.click();
   };
 
   return (
@@ -1136,11 +1055,16 @@ export const BalanceView: React.FC<Props> = ({
       <div className="flex items-center gap-2">
         <button
           type="button"
-          onClick={exportarCSV}
-          className="flex-1 min-h-[44px] px-3 py-2 text-xs font-bold border border-[#E4E4E7] bg-white text-[#18181B] rounded hover:bg-zinc-50 active:bg-zinc-100 flex items-center justify-center gap-1.5 shadow-xs"
+          onClick={handleExportarExcel}
+          disabled={exportandoExcel}
+          className="flex-1 min-h-[44px] px-3 py-2 text-xs font-bold border border-[#E4E4E7] bg-white text-[#18181B] rounded hover:bg-zinc-50 active:bg-zinc-100 flex items-center justify-center gap-1.5 shadow-xs disabled:opacity-60 cursor-pointer"
         >
-          <Download size={15} className="text-[#52525B]" />
-          <span>Exportar Excel (CSV)</span>
+          {exportandoExcel ? (
+            <Loader2 size={15} className="animate-spin text-[#1E3A3A]" />
+          ) : (
+            <Download size={15} className="text-[#52525B]" />
+          )}
+          <span>{exportandoExcel ? 'Generando .xlsx...' : 'Exportar Excel (.xlsx)'}</span>
         </button>
 
         <button
@@ -1784,11 +1708,16 @@ export const BalanceView: React.FC<Props> = ({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={exportarCSVMensual}
-              className="flex-1 min-h-[44px] px-3 py-2 text-xs font-bold border border-[#E4E4E7] bg-white text-[#18181B] rounded-lg hover:bg-zinc-50 active:bg-zinc-100 flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
+              onClick={handleExportarExcel}
+              disabled={exportandoExcel}
+              className="flex-1 min-h-[44px] px-3 py-2 text-xs font-bold border border-[#E4E4E7] bg-white text-[#18181B] rounded-lg hover:bg-zinc-50 active:bg-zinc-100 flex items-center justify-center gap-1.5 shadow-xs disabled:opacity-60 cursor-pointer"
             >
-              <Download size={15} className="text-[#52525B]" />
-              <span>Exportar Excel (CSV)</span>
+              {exportandoExcel ? (
+                <Loader2 size={15} className="animate-spin text-[#1E3A3A]" />
+              ) : (
+                <Download size={15} className="text-[#52525B]" />
+              )}
+              <span>{exportandoExcel ? 'Generando .xlsx...' : 'Exportar Excel (.xlsx)'}</span>
             </button>
 
             <button
