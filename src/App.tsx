@@ -397,6 +397,7 @@ export const App: React.FC = () => {
                 onActualizarMovimiento={handleActualizarMovimiento}
                 onEliminarMovimiento={handleEliminarMovimiento}
                 onCrearMovimiento={handleCrearUnico}
+                onRecargarDatos={cargarDatos}
               />
             )}
 

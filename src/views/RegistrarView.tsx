@@ -903,6 +903,21 @@ export const RegistrarView: React.FC<Props> = ({
             setMovimientoParaEditar(null);
           }}
           onGuardar={handleActualizarItem}
+          onRecargarDatos={onRecargarDatos}
+          onCambioCompletado={({ accion, eliminadoId, registros }) => {
+            if (accion === 'actualizado' && eliminadoId && registros[0]) {
+              setMovimientosSesion((prev) =>
+                prev.map((item) => (item.id === eliminadoId ? registros[0] : item))
+              );
+            } else if (accion === 'mixto') {
+              setMovimientosSesion((prev) => {
+                const filtrados = eliminadoId
+                  ? prev.filter((item) => item.id !== eliminadoId)
+                  : prev;
+                return [...registros, ...filtrados];
+              });
+            }
+          }}
         />
       )}
     </div>

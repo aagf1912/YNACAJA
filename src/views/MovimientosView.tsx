@@ -24,6 +24,7 @@ interface Props {
   onActualizarMovimiento: (mov: Movimiento) => Promise<void>;
   onEliminarMovimiento: (id: string) => Promise<void>;
   onCrearMovimiento: (mov: Omit<Movimiento, 'id' | 'created_at'>) => Promise<Movimiento[]>;
+  onRecargarDatos?: () => Promise<void>;
 }
 
 type FiltroTipo = 'todos' | 'ventas' | 'gastos' | 'personal';
@@ -53,6 +54,7 @@ export const MovimientosView: React.FC<Props> = ({
   onActualizarMovimiento,
   onEliminarMovimiento,
   onCrearMovimiento,
+  onRecargarDatos,
 }) => {
   const [filtro, setFiltro] = useState<FiltroTipo>('todos');
   const [filtroPuesto, setFiltroPuesto] = useState<string>('todos');
@@ -638,6 +640,7 @@ export const MovimientosView: React.FC<Props> = ({
           setMovimientoParaEditar(null);
         }}
         onGuardar={handleGuardarModal}
+        onRecargarDatos={onRecargarDatos}
       />
 
       {/* Modal Cierre de Puesto (Administrador) */}
