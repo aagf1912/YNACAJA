@@ -9,6 +9,7 @@ export type CategoriaMovimiento =
   | 'Materia Prima'
   | 'Hielo'
   | 'Vasos'
+  | 'Vasos e Insumos'
   | 'Personal / Ocio / Regalos'
   | 'Transporte y Logística'
   | 'Insumos y Empaques'
@@ -83,8 +84,9 @@ export interface ConfigNegocio {
 export const CATEGORIAS_GASTO: { nombre: CategoriaMovimiento; naturaleza: NaturalezaMovimiento }[] = [
   { nombre: 'Materia Prima', naturaleza: 'Negocio' },
   { nombre: 'Hielo', naturaleza: 'Negocio' },
-  { nombre: 'Vasos', naturaleza: 'Negocio' },
+  { nombre: 'Vasos e Insumos', naturaleza: 'Negocio' },
   { nombre: 'Transporte y Logística', naturaleza: 'Negocio' },
+  { nombre: 'Recargas y Servicios', naturaleza: 'Negocio' },
   { nombre: 'Cuota Negocio', naturaleza: 'Negocio' },
   { nombre: 'Gastos de Emergencia', naturaleza: 'Negocio' },
   { nombre: 'Equipamiento / Maquinaria', naturaleza: 'Negocio' },
@@ -103,8 +105,7 @@ export function normalizarCategoriaGasto(
   const c = (cat || '').trim();
   if (!c) return fallback;
   if (c === 'Hielo y Varios Operativos') return 'Hielo';
-  if (c === 'Insumos y Empaques') return 'Vasos';
-  if (c === 'Recargas y Servicios') return 'Cuota Negocio';
+  if (c === 'Vasos' || c === 'Insumos y Empaques') return 'Vasos e Insumos';
   if (c === 'Nómina / Sueldos') return 'Sueldos / Comisiones';
   return c as CategoriaMovimiento;
 }

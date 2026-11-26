@@ -264,9 +264,10 @@ export const ModalMovimiento: React.FC<Props> = ({
   const sugerencias: Record<ModoRegistro, string[]> = {
     gastos: [
       'Hielo',
-      'Vasos',
+      'Vasos / Pitillos',
       'Materia prima',
       'Transporte',
+      'Recargas / Servicios',
       'Cuota negocio',
       'Emergencia / Arreglo',
     ],
