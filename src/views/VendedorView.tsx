@@ -10,6 +10,7 @@ import {
   TrendingDown,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Loader2,
   Award,
   Banknote,
@@ -155,16 +156,18 @@ export const VendedorView: React.FC<Props> = ({
   const [montoPuntoVentaBs, setMontoPuntoVentaBs] = useState<string>('');
   const [montoDivisasUSD, setMontoDivisasUSD] = useState<string>('');
 
-  // Estados de guardado, mensaje y toast
+  // Estados de guardado, confirmación, mensaje y toast
   const [guardando, setGuardando] = useState<boolean>(false);
   const [tieneCierreGuardado, setTieneCierreGuardado] = useState<boolean>(false);
+  const [modalConfirmarAbierto, setModalConfirmarAbierto] = useState<boolean>(false);
   const [toastMensaje, setToastMensaje] = useState<string | null>(null);
   const [mensajeExito, setMensajeExito] = useState<string | null>(null);
   const [mensajeError, setMensajeError] = useState<string | null>(null);
 
-  // Bloqueo de "Ayer" si ya tiene datos cargados
+  // Bloqueo de "Ayer" o "Hoy" si ya tiene un cierre guardado
   const esAyer = fechaSeleccionada === fechaAyerVzla;
   const ayerBloqueado = esAyer && tieneCierreGuardado;
+  const hoyBloqueado = !esAyer && tieneCierreGuardado;
 
   // Comisión del puesto (default 22%)
   const comisionPorcentaje = perfil.puesto?.porcentaje_comision ?? 22.0;
@@ -354,6 +357,7 @@ export const VendedorView: React.FC<Props> = ({
     const tasa = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
     const totalBsVentas = efBs + pmBs + ptBs;
     const totalVendidoUSD = totalBsVentas / tasa + divUSD;
+    const totalVendidoBs = totalBsVentas + divUSD * tasa;
     const comisionUSD = (totalVendidoUSD * comisionPorcentaje) / 100;
 
     return {
@@ -362,15 +366,40 @@ export const VendedorView: React.FC<Props> = ({
       ptBs,
       divUSD,
       totalVendidoUSD,
+      totalVendidoBs,
       comisionUSD,
       efectivoBsFisico: efBs,
       divisasUSDFisico: divUSD,
     };
   }, [montoEfectivoBs, montoPagoMovilBs, montoPuntoVentaBs, montoDivisasUSD, tasaEfectiva, tasaDia, comisionPorcentaje]);
 
-  // Guardar Cierre del Día (Hoy o Ayer) con try/catch/finally garantizado y timeout
+  // Validar y abrir el modal de confirmación obligatoria antes de guardar
+  const handleSolicitarConfirmacion = () => {
+    if (guardando || ayerBloqueado || hoyBloqueado) return;
+
+    if (!perfil.puesto_id) {
+      setMensajeError('No tienes un puesto de venta asignado a tu cuenta.');
+      return;
+    }
+
+    const efBs = parseFloat(montoEfectivoBs) || 0;
+    const pmBs = parseFloat(montoPagoMovilBs) || 0;
+    const ptBs = parseFloat(montoPuntoVentaBs) || 0;
+    const divUSD = parseFloat(montoDivisasUSD) || 0;
+
+    const totalVendido = efBs + pmBs + ptBs + divUSD;
+    if (totalVendido <= 0) {
+      setMensajeError('Ingresa al menos un monto de venta para guardar el cierre del día.');
+      return;
+    }
+
+    setMensajeError(null);
+    setModalConfirmarAbierto(true);
+  };
+
+  // Guardar Cierre del Día definitivo con try/catch/finally garantizado y timeout
   const handleGuardarCierre = async () => {
-    if (guardando || ayerBloqueado) return;
+    if (guardando || ayerBloqueado || hoyBloqueado) return;
 
     if (!perfil.puesto_id) {
       setMensajeError('No tienes un puesto de venta asignado a tu cuenta.');
@@ -432,6 +461,7 @@ export const VendedorView: React.FC<Props> = ({
       }
 
       setTieneCierreGuardado(true);
+      setModalConfirmarAbierto(false);
       const msgOk = `Cierre (${fechaSeleccionadaTexto}) guardado correctamente`;
       setToastMensaje(msgOk);
       setMensajeExito(msgOk);
@@ -734,217 +764,277 @@ export const VendedorView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* 4 CAMPOS NUMÉRICOS CLAROS DE VENTAS */}
-          <div className="bg-white border border-[#E4E4E7] rounded-xl p-4 shadow-xs space-y-3">
-            <span className="block text-xs font-bold text-[#18181B] uppercase tracking-wide pb-1 border-b border-[#E4E4E7]">
-              Ventas del Día ({fechaSeleccionadaTexto})
-            </span>
+          {hoyBloqueado ? (
+            /* TARJETA INFORMATIVA: CIERRE DE HOY YA REGISTRADO (UN SOLO CIERRE POR DÍA) */
+            <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl p-4 sm:p-5 shadow-xs space-y-4">
+              <div className="flex items-start gap-3 pb-3 border-b border-emerald-200/70">
+                <div className="w-9 h-9 rounded-lg bg-[#10B981]/20 border border-[#10B981]/30 flex items-center justify-center text-[#047857] shrink-0">
+                  <CheckCircle2 size={20} />
+                </div>
+                <div>
+                  <h2 className="text-sm sm:text-base font-extrabold text-[#065F46]">
+                    Cierre del día ya registrado
+                  </h2>
+                  <p className="text-xs text-[#047857] mt-0.5 leading-relaxed">
+                    Ya cargaste el cierre de hoy. Si necesitás corregir algún monto, comunicate con el administrador.
+                  </p>
+                </div>
+              </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {/* Efectivo Bs */}
-              <div className="p-3 bg-[#FAFAFA] border border-[#E4E4E7] rounded-lg">
-                <label className="flex items-center justify-between text-xs font-bold text-[#18181B] mb-1.5">
-                  <span className="flex items-center gap-1.5">
-                    <Banknote size={15} className="text-[#166534]" />
-                    <span>Efectivo (Bs)</span>
+              {/* Resumen de totales guardados */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-white/80 border border-emerald-200/80 rounded-lg p-3">
+                  <span className="text-[11px] font-semibold text-[#065F46] block">
+                    Ventas Totales ({labelHoy})
                   </span>
-                  <span className="text-[10px] text-zinc-400 font-normal">Físico Bs</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="any"
-                    inputMode="decimal"
-                    value={montoEfectivoBs}
-                    onChange={(e) => setMontoEfectivoBs(e.target.value)}
-                    disabled={ayerBloqueado || guardando}
-                    placeholder="0.00"
-                    className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
-                  />
-                  <span className="absolute right-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
-                    Bs
+                  <div className="text-lg sm:text-xl font-black text-[#065F46] font-mono tabular-nums mt-0.5">
+                    {formatUSD(resumenCierre.totalVendidoUSD)}
+                  </div>
+                  <span className="text-[11px] font-semibold text-[#047857] font-mono tabular-nums">
+                    {formatVES(resumenCierre.totalVendidoBs)}
+                  </span>
+                </div>
+
+                <div className="bg-white/80 border border-emerald-200/80 rounded-lg p-3">
+                  <span className="text-[11px] font-semibold text-[#065F46] block">
+                    Comisión ({comisionPorcentaje}%)
+                  </span>
+                  <div className="text-lg sm:text-xl font-black text-[#047857] font-mono tabular-nums mt-0.5">
+                    {formatUSD(resumenCierre.comisionUSD)}
+                  </div>
+                  <span className="text-[10px] text-[#059669]">
+                    Tasa: {formatNumber(tasaEfectiva > 0 ? tasaEfectiva : tasaDia)} Bs/$
                   </span>
                 </div>
               </div>
 
-              {/* Pago Móvil Bs */}
-              <div className="p-3 bg-[#FAFAFA] border border-[#E4E4E7] rounded-lg">
-                <label className="flex items-center justify-between text-xs font-bold text-[#18181B] mb-1.5">
-                  <span className="flex items-center gap-1.5">
-                    <Smartphone size={15} className="text-[#2563EB]" />
-                    <span>Pago Móvil (Bs)</span>
-                  </span>
-                  <span className="text-[10px] text-zinc-400 font-normal">Digital Bs</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="any"
-                    inputMode="decimal"
-                    value={montoPagoMovilBs}
-                    onChange={(e) => setMontoPagoMovilBs(e.target.value)}
-                    disabled={ayerBloqueado || guardando}
-                    placeholder="0.00"
-                    className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
-                  />
-                  <span className="absolute right-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
-                    Bs
-                  </span>
-                </div>
-              </div>
-
-              {/* Punto de Venta Bs */}
-              <div className="p-3 bg-[#FAFAFA] border border-[#E4E4E7] rounded-lg">
-                <label className="flex items-center justify-between text-xs font-bold text-[#18181B] mb-1.5">
-                  <span className="flex items-center gap-1.5">
-                    <CreditCard size={15} className="text-[#7C3AED]" />
-                    <span>Punto de Venta (Bs)</span>
-                  </span>
-                  <span className="text-[10px] text-zinc-400 font-normal">Tarjeta Bs</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="any"
-                    inputMode="decimal"
-                    value={montoPuntoVentaBs}
-                    onChange={(e) => setMontoPuntoVentaBs(e.target.value)}
-                    disabled={ayerBloqueado || guardando}
-                    placeholder="0.00"
-                    className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
-                  />
-                  <span className="absolute right-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
-                    Bs
-                  </span>
-                </div>
-              </div>
-
-              {/* Divisas $ en efectivo */}
-              <div className="p-3 bg-[#FAFAFA] border border-[#E4E4E7] rounded-lg">
-                <label className="flex items-center justify-between text-xs font-bold text-[#18181B] mb-1.5">
-                  <span className="flex items-center gap-1.5">
-                    <CircleDollarSign size={15} className="text-[#059669]" />
-                    <span>Divisas ($ efectivo)</span>
-                  </span>
-                  <span className="text-[10px] text-zinc-400 font-normal">Físico $</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="any"
-                    inputMode="decimal"
-                    value={montoDivisasUSD}
-                    onChange={(e) => setMontoDivisasUSD(e.target.value)}
-                    disabled={ayerBloqueado || guardando}
-                    placeholder="0.00"
-                    className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
-                  />
-                  <span className="absolute right-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
-                    $
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* TARJETA DE RESUMEN EN VIVO */}
-          <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl p-3.5 sm:p-4 shadow-xs">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <span className="text-[11px] text-[#065F46] block font-semibold">
-                  Total Vendido ({diaSeleccionado === 'hoy' ? 'Hoy' : 'Ayer'}) ($):
+              {/* Desglose por método de pago */}
+              <div className="bg-white/80 border border-emerald-200/80 rounded-lg p-3 space-y-2">
+                <span className="text-[10px] uppercase font-bold text-[#166534] tracking-wider block">
+                  Desglose guardado por método:
                 </span>
-                <div className="text-xl sm:text-2xl font-black tabular-nums text-[#065F46]">
-                  {formatUSD(resumenCierre.totalVendidoUSD)}
-                </div>
-                <span className="text-[10px] text-[#047857]">
-                  Tasa: {formatNumber(tasaEfectiva > 0 ? tasaEfectiva : tasaDia)} Bs/$
-                </span>
-              </div>
-
-              <div className="sm:border-l sm:border-[#A7F3D0] sm:pl-3">
-                <span className="text-[11px] text-[#065F46] block font-semibold">
-                  Tu Comisión ({diaSeleccionado === 'hoy' ? 'del Día' : 'de Ayer'}) ({comisionPorcentaje}%):
-                </span>
-                <div className="text-lg sm:text-2xl font-black tabular-nums text-[#047857] font-mono">
-                  ({formatUSD(resumenCierre.comisionUSD)})
-                </div>
-                <span className="text-[10px] text-[#059669]">
-                  Calculada sobre venta bruta
-                </span>
-              </div>
-
-              <div className="bg-white/80 border border-[#A7F3D0] rounded-lg p-2.5 sm:p-2 sm:border-l">
-                <span className="text-[10px] uppercase font-bold text-[#166534] block mb-1">
-                  Dinero Físico a Entregar:
-                </span>
-                <div className="text-xs font-bold text-[#18181B] flex justify-between gap-1">
-                  <span>Efectivo Bs:</span>
-                  <span className="font-mono tabular-nums text-[#166534]">
-                    {formatVES(resumenCierre.efectivoBsFisico)}
-                  </span>
-                </div>
-                <div className="text-xs font-bold text-[#18181B] flex justify-between gap-1 mt-0.5">
-                  <span>Divisas $:</span>
-                  <span className="font-mono tabular-nums text-[#059669]">
-                    {formatUSD(resumenCierre.divisasUSDFisico)}
-                  </span>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="flex items-center justify-between bg-[#ECFDF5]/60 px-2.5 py-1.5 rounded border border-emerald-100">
+                    <span className="text-zinc-600 font-medium">Efectivo Bs:</span>
+                    <span className="font-mono font-bold text-[#18181B] tabular-nums">
+                      {formatVES(resumenCierre.efBs)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between bg-[#ECFDF5]/60 px-2.5 py-1.5 rounded border border-emerald-100">
+                    <span className="text-zinc-600 font-medium">Pago Móvil:</span>
+                    <span className="font-mono font-bold text-[#18181B] tabular-nums">
+                      {formatVES(resumenCierre.pmBs)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between bg-[#ECFDF5]/60 px-2.5 py-1.5 rounded border border-emerald-100">
+                    <span className="text-zinc-600 font-medium">Punto Venta:</span>
+                    <span className="font-mono font-bold text-[#18181B] tabular-nums">
+                      {formatVES(resumenCierre.ptBs)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between bg-[#ECFDF5]/60 px-2.5 py-1.5 rounded border border-emerald-100">
+                    <span className="text-zinc-600 font-medium">Divisas ($):</span>
+                    <span className="font-mono font-bold text-[#059669] tabular-nums">
+                      {formatUSD(resumenCierre.divUSD)}
+                    </span>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-
-          {/* ESTADO DEL CIERRE: BLOQUEADO (AYER) O EDITABLE / GUARDABLE */}
-          {ayerBloqueado ? (
-            <div className="p-3.5 bg-zinc-100 border border-zinc-300 rounded-xl text-xs text-zinc-700 font-semibold flex items-center gap-2.5 shadow-xs">
-              <span className="text-base shrink-0">🔒</span>
-              <span>
-                Cierre de ayer ya registrado. Solo el administrador (Ynaides) puede modificar o eliminar cierres anteriores.
-              </span>
             </div>
           ) : (
             <>
-              {/* AVISO VERDE SI YA HAY CIERRE GUARDADO */}
-              {tieneCierreGuardado && (
-                <div className="p-3 bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl text-xs text-[#065F46] flex items-center gap-2">
-                  <CheckCircle2 size={16} className="text-[#10B981] shrink-0" />
-                  <span className="font-semibold">
-                    ✓ Cierre guardado (podés modificar los montos si necesitás corregir algo)
+              {/* 4 CAMPOS NUMÉRICOS CLAROS DE VENTAS */}
+              <div className="bg-white border border-[#E4E4E7] rounded-xl p-4 shadow-xs space-y-3">
+                <span className="block text-xs font-bold text-[#18181B] uppercase tracking-wide pb-1 border-b border-[#E4E4E7]">
+                  Ventas del Día ({fechaSeleccionadaTexto})
+                </span>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Efectivo Bs */}
+                  <div className="p-3 bg-[#FAFAFA] border border-[#E4E4E7] rounded-lg">
+                    <label className="flex items-center justify-between text-xs font-bold text-[#18181B] mb-1.5">
+                      <span className="flex items-center gap-1.5">
+                        <Banknote size={15} className="text-[#166534]" />
+                        <span>Efectivo (Bs)</span>
+                      </span>
+                      <span className="text-[10px] text-zinc-400 font-normal">Físico Bs</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="any"
+                        inputMode="decimal"
+                        value={montoEfectivoBs}
+                        onChange={(e) => setMontoEfectivoBs(e.target.value)}
+                        disabled={ayerBloqueado || guardando}
+                        placeholder="0.00"
+                        className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
+                      />
+                      <span className="absolute right-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
+                        Bs
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Pago Móvil Bs */}
+                  <div className="p-3 bg-[#FAFAFA] border border-[#E4E4E7] rounded-lg">
+                    <label className="flex items-center justify-between text-xs font-bold text-[#18181B] mb-1.5">
+                      <span className="flex items-center gap-1.5">
+                        <Smartphone size={15} className="text-[#2563EB]" />
+                        <span>Pago Móvil (Bs)</span>
+                      </span>
+                      <span className="text-[10px] text-zinc-400 font-normal">Digital Bs</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="any"
+                        inputMode="decimal"
+                        value={montoPagoMovilBs}
+                        onChange={(e) => setMontoPagoMovilBs(e.target.value)}
+                        disabled={ayerBloqueado || guardando}
+                        placeholder="0.00"
+                        className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
+                      />
+                      <span className="absolute right-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
+                        Bs
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Punto de Venta Bs */}
+                  <div className="p-3 bg-[#FAFAFA] border border-[#E4E4E7] rounded-lg">
+                    <label className="flex items-center justify-between text-xs font-bold text-[#18181B] mb-1.5">
+                      <span className="flex items-center gap-1.5">
+                        <CreditCard size={15} className="text-[#7C3AED]" />
+                        <span>Punto de Venta (Bs)</span>
+                      </span>
+                      <span className="text-[10px] text-zinc-400 font-normal">Tarjeta Bs</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="any"
+                        inputMode="decimal"
+                        value={montoPuntoVentaBs}
+                        onChange={(e) => setMontoPuntoVentaBs(e.target.value)}
+                        disabled={ayerBloqueado || guardando}
+                        placeholder="0.00"
+                        className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
+                      />
+                      <span className="absolute right-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
+                        Bs
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Divisas $ en efectivo */}
+                  <div className="p-3 bg-[#FAFAFA] border border-[#E4E4E7] rounded-lg">
+                    <label className="flex items-center justify-between text-xs font-bold text-[#18181B] mb-1.5">
+                      <span className="flex items-center gap-1.5">
+                        <CircleDollarSign size={15} className="text-[#059669]" />
+                        <span>Divisas ($ efectivo)</span>
+                      </span>
+                      <span className="text-[10px] text-zinc-400 font-normal">Físico $</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="any"
+                        inputMode="decimal"
+                        value={montoDivisasUSD}
+                        onChange={(e) => setMontoDivisasUSD(e.target.value)}
+                        disabled={ayerBloqueado || guardando}
+                        placeholder="0.00"
+                        className="w-full p-2.5 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
+                      />
+                      <span className="absolute right-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
+                        $
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* TARJETA DE RESUMEN EN VIVO */}
+              <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl p-3.5 sm:p-4 shadow-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <span className="text-[11px] text-[#065F46] block font-semibold">
+                      Total Vendido ({diaSeleccionado === 'hoy' ? 'Hoy' : 'Ayer'}) ($):
+                    </span>
+                    <div className="text-xl sm:text-2xl font-black tabular-nums text-[#065F46]">
+                      {formatUSD(resumenCierre.totalVendidoUSD)}
+                    </div>
+                    <span className="text-[10px] text-[#047857]">
+                      Tasa: {formatNumber(tasaEfectiva > 0 ? tasaEfectiva : tasaDia)} Bs/$
+                    </span>
+                  </div>
+
+                  <div className="sm:border-l sm:border-[#A7F3D0] sm:pl-3">
+                    <span className="text-[11px] text-[#065F46] block font-semibold">
+                      Tu Comisión ({diaSeleccionado === 'hoy' ? 'del Día' : 'de Ayer'}) ({comisionPorcentaje}%):
+                    </span>
+                    <div className="text-lg sm:text-2xl font-black tabular-nums text-[#047857] font-mono">
+                      ({formatUSD(resumenCierre.comisionUSD)})
+                    </div>
+                    <span className="text-[10px] text-[#059669]">
+                      Calculada sobre venta bruta
+                    </span>
+                  </div>
+
+                  <div className="bg-white/80 border border-[#A7F3D0] rounded-lg p-2.5 sm:p-2 sm:border-l">
+                    <span className="text-[10px] uppercase font-bold text-[#166534] block mb-1">
+                      Dinero Físico a Entregar:
+                    </span>
+                    <div className="text-xs font-bold text-[#18181B] flex justify-between gap-1">
+                      <span>Efectivo Bs:</span>
+                      <span className="font-mono tabular-nums text-[#166534]">
+                        {formatVES(resumenCierre.efectivoBsFisico)}
+                      </span>
+                    </div>
+                    <div className="text-xs font-bold text-[#18181B] flex justify-between gap-1 mt-0.5">
+                      <span>Divisas $:</span>
+                      <span className="font-mono tabular-nums text-[#059669]">
+                        {formatUSD(resumenCierre.divisasUSDFisico)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* ESTADO DEL CIERRE: BLOQUEADO (AYER) O GUARDABLE CON CONFIRMACIÓN */}
+              {ayerBloqueado ? (
+                <div className="p-3.5 bg-zinc-100 border border-zinc-300 rounded-xl text-xs text-zinc-700 font-semibold flex items-center gap-2.5 shadow-xs">
+                  <span className="text-base shrink-0">🔒</span>
+                  <span>
+                    Cierre de ayer ya registrado. Solo el administrador (Ynaides) puede modificar o eliminar cierres anteriores.
                   </span>
                 </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSolicitarConfirmacion}
+                  disabled={guardando}
+                  className="w-full min-h-[48px] px-4 py-2.5 text-xs sm:text-sm font-bold bg-[#2C474E] text-white rounded-xl hover:bg-[#23393e] active:bg-[#1a2b2f] flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+                >
+                  {guardando ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin text-white" />
+                      <span>
+                        {esAyer ? 'Guardando Cierre de Ayer...' : 'Guardando Cierre del Día...'}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 size={17} className="text-[#86EFAC]" />
+                      <span>
+                        {esAyer ? 'Guardar Cierre de Ayer' : `Guardar Cierre del Día (${labelHoy})`}
+                      </span>
+                    </>
+                  )}
+                </button>
               )}
-
-              {/* BOTÓN GUARDAR / ACTUALIZAR CIERRE */}
-              <button
-                type="button"
-                onClick={handleGuardarCierre}
-                disabled={guardando}
-                className="w-full min-h-[48px] px-4 py-2.5 text-xs sm:text-sm font-bold bg-[#2C474E] text-white rounded-xl hover:bg-[#23393e] active:bg-[#1a2b2f] flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
-              >
-                {guardando ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin text-white" />
-                    <span>
-                      {esAyer
-                        ? 'Guardando Cierre de Ayer...'
-                        : tieneCierreGuardado
-                        ? 'Actualizando Cierre del Día...'
-                        : 'Guardando Cierre del Día...'}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 size={17} className="text-[#86EFAC]" />
-                    <span>
-                      {esAyer
-                        ? 'Guardar Cierre de Ayer'
-                        : tieneCierreGuardado
-                        ? 'Actualizar Cierre del Día'
-                        : `Guardar Cierre del Día (${labelHoy})`}
-                    </span>
-                  </>
-                )}
-              </button>
             </>
           )}
 
@@ -1420,6 +1510,94 @@ export const VendedorView: React.FC<Props> = ({
           </button>
         </div>
       </nav>
+
+      {/* MODAL DE CONFIRMACIÓN OBLIGATORIA ANTES DE GUARDAR CIERRE */}
+      {modalConfirmarAbierto && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-zinc-200 rounded-2xl max-w-md w-full p-5 shadow-xl space-y-4">
+            <div className="flex items-center gap-2.5 pb-3 border-b border-zinc-100">
+              <div className="w-9 h-9 rounded-lg bg-[#ECFDF5] border border-emerald-200 flex items-center justify-center text-[#047857] shrink-0">
+                <CheckCircle2 size={20} />
+              </div>
+              <div>
+                <h3 className="text-base font-extrabold text-[#18181B]">
+                  ¿Confirmar Cierre de Caja?
+                </h3>
+                <span className="text-[11px] text-zinc-500 font-medium">
+                  Verificá los totales antes de registrar
+                </span>
+              </div>
+            </div>
+
+            {/* Resumen compacto */}
+            <div className="bg-zinc-50 border border-zinc-200/80 rounded-xl p-3.5 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-500 font-medium">Fecha:</span>
+                <span className="font-bold text-[#18181B]">{fechaSeleccionadaTexto} ({fechaSeleccionada})</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-500 font-medium">Puesto:</span>
+                <span className="font-bold text-[#18181B] uppercase">{perfil.puesto?.nombre || 'Mi Puesto'}</span>
+              </div>
+              <div className="pt-2 border-t border-zinc-200/70 flex items-center justify-between">
+                <span className="text-zinc-600 font-semibold">Total Ventas:</span>
+                <div className="text-right">
+                  <span className="block font-black text-sm text-[#065F46] font-mono tabular-nums">
+                    {formatUSD(resumenCierre.totalVendidoUSD)}
+                  </span>
+                  <span className="block text-[11px] text-zinc-500 font-mono tabular-nums">
+                    {formatVES(resumenCierre.totalVendidoBs)}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-600 font-semibold">Comisión ({comisionPorcentaje}%):</span>
+                <span className="font-bold text-[#047857] font-mono tabular-nums">
+                  {formatUSD(resumenCierre.comisionUSD)}
+                </span>
+              </div>
+            </div>
+
+            {/* Advertencia destacada */}
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2.5 text-amber-900">
+              <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-xs font-semibold leading-relaxed">
+                ¿Estás seguro de realizar este cierre? Una vez guardado, no podrás modificarlo ni cargar otro cierre hoy.
+              </p>
+            </div>
+
+            {/* Botones de acción */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setModalConfirmarAbierto(false)}
+                disabled={guardando}
+                className="w-full min-h-[44px] px-3 py-2 text-xs font-bold text-[#18181B] bg-zinc-100 hover:bg-zinc-200 rounded-xl border border-zinc-200 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Revisar datos
+              </button>
+              <button
+                type="button"
+                onClick={handleGuardarCierre}
+                disabled={guardando}
+                className="w-full min-h-[44px] px-3 py-2 text-xs font-bold text-white bg-[#1E3A3A] hover:bg-[#162d2d] rounded-xl flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {guardando ? (
+                  <>
+                    <Loader2 size={15} className="animate-spin text-white" />
+                    <span>Guardando...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={15} className="text-[#86EFAC]" />
+                    <span>Sí, guardar cierre definitivo</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
