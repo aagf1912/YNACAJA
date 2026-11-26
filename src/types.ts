@@ -14,6 +14,7 @@ export type CategoriaMovimiento =
   | 'Hielo y Varios Operativos'
   | 'Recargas y Servicios'
   | 'Cuota Negocio'
+  | 'Equipamiento / Maquinaria'
   | 'Sueldos / Comisiones';
 
 export type MetodoPago = 'pago_movil' | 'punto_venta' | 'efectivo_bs' | 'divisa';
@@ -83,6 +84,7 @@ export const CATEGORIAS_GASTO: { nombre: CategoriaMovimiento; naturaleza: Natura
   { nombre: 'Transporte y Logística', naturaleza: 'Negocio' },
   { nombre: 'Recargas y Servicios', naturaleza: 'Negocio' },
   { nombre: 'Cuota Negocio', naturaleza: 'Negocio' },
+  { nombre: 'Equipamiento / Maquinaria', naturaleza: 'Negocio' },
   { nombre: 'Sueldos / Comisiones', naturaleza: 'Negocio' },
   { nombre: 'Personal / Ocio / Regalos', naturaleza: 'Personal' },
   { nombre: 'Comidas y Bebidas', naturaleza: 'Personal' },
