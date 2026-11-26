@@ -1162,13 +1162,17 @@ export const BalanceView: React.FC<Props> = ({
             <div className="flex items-center gap-2">
               <Store size={15} className="text-[#86EFAC]" />
               <span className="text-xs font-bold uppercase tracking-wider">
-                Comisión Vendedores por Puesto
+                {filtroPuesto === 'todos'
+                  ? 'Comisión Vendedores por Puesto'
+                  : `Comisión Vendedor — ${nombreFiltroPuesto}`}
               </span>
             </div>
           </div>
 
           <div className="p-3 space-y-2.5">
-            {resumenPorPuesto.items.map((p) => (
+            {resumenPorPuesto.items
+              .filter((p) => filtroPuesto === 'todos' || p.id === filtroPuesto)
+              .map((p) => (
               <div
                 key={p.id}
                 className="border border-zinc-200/80 rounded-xl p-3 bg-white hover:bg-zinc-50/60 transition-colors space-y-2.5"
@@ -1249,14 +1253,8 @@ export const BalanceView: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* Fila inferior: Grilla de 4 columnas iguales */}
-                <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-zinc-100 text-center">
-                  <div className="bg-zinc-50/80 rounded-lg py-1.5 px-1">
-                    <span className="block text-[10px] text-zinc-400 font-medium">Cant.</span>
-                    <span className="block text-xs font-bold text-zinc-700 tabular-nums mt-0.5">
-                      {p.ventasCount}
-                    </span>
-                  </div>
+                {/* Fila inferior: Grilla de 3 columnas iguales */}
+                <div className="grid grid-cols-3 gap-1.5 pt-2 border-t border-zinc-100 text-center">
                   <div className="bg-zinc-50/80 rounded-lg py-1.5 px-1">
                     <span className="block text-[10px] text-zinc-400 font-medium">Ventas</span>
                     <span className="block text-xs font-bold text-[#18181B] tabular-nums mt-0.5">
@@ -1284,48 +1282,44 @@ export const BalanceView: React.FC<Props> = ({
               </div>
             ))}
 
-            {/* Tarjeta de resumen TOTAL */}
-            <div className="border border-zinc-200 bg-zinc-50 rounded-xl p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black text-[#18181B] uppercase tracking-wide">
-                  TOTAL
-                </span>
-                <span className="text-[10px] font-semibold text-zinc-500">
-                  Todos los puestos
-                </span>
-              </div>
-              <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-zinc-200/70 text-center">
-                <div className="bg-white rounded-lg py-1.5 px-1 border border-zinc-200/60">
-                  <span className="block text-[10px] text-zinc-400 font-medium">Cant.</span>
-                  <span className="block text-xs font-bold text-zinc-700 tabular-nums mt-0.5">
-                    {resumenPorPuesto.items.reduce((acc, i) => acc + i.ventasCount, 0)}
+            {/* Tarjeta de resumen TOTAL (visible solo en vista consolidada) */}
+            {filtroPuesto === 'todos' && (
+              <div className="border border-zinc-200 bg-zinc-50 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-[#18181B] uppercase tracking-wide">
+                    TOTAL
+                  </span>
+                  <span className="text-[10px] font-semibold text-zinc-500">
+                    Todos los puestos
                   </span>
                 </div>
-                <div className="bg-white rounded-lg py-1.5 px-1 border border-zinc-200/60">
-                  <span className="block text-[10px] text-zinc-400 font-medium">Ventas</span>
-                  <span className="block text-xs font-bold text-[#18181B] tabular-nums mt-0.5">
-                    {formatUSD(resumenPorPuesto.totalVentas)}
-                  </span>
-                </div>
-                <div className="bg-white rounded-lg py-1.5 px-1 border border-emerald-200/60">
-                  <span className="block text-[10px] text-[#047857] font-medium">Comisión</span>
-                  <span className="block text-xs font-bold text-[#047857] tabular-nums mt-0.5">
-                    ({formatUSD(resumenPorPuesto.totalComision)})
-                  </span>
-                  {resumenPorPuesto.totalYaPagado > 0 && (
-                    <span className="block text-[9px] text-[#166534] font-semibold tabular-nums leading-tight mt-0.5">
-                      Pagado: {formatUSD(resumenPorPuesto.totalYaPagado)}
+                <div className="grid grid-cols-3 gap-1.5 pt-2 border-t border-zinc-200/70 text-center">
+                  <div className="bg-white rounded-lg py-1.5 px-1 border border-zinc-200/60">
+                    <span className="block text-[10px] text-zinc-400 font-medium">Ventas</span>
+                    <span className="block text-xs font-bold text-[#18181B] tabular-nums mt-0.5">
+                      {formatUSD(resumenPorPuesto.totalVentas)}
                     </span>
-                  )}
-                </div>
-                <div className="bg-white rounded-lg py-1.5 px-1 border border-zinc-200/60">
-                  <span className="block text-[10px] text-[#1E3A3A] font-medium leading-tight">Neto Negocio</span>
-                  <span className="block text-xs font-black text-[#1E3A3A] tabular-nums mt-0.5">
-                    {formatUSD(resumenPorPuesto.totalNeto)}
-                  </span>
+                  </div>
+                  <div className="bg-white rounded-lg py-1.5 px-1 border border-emerald-200/60">
+                    <span className="block text-[10px] text-[#047857] font-medium">Comisión</span>
+                    <span className="block text-xs font-bold text-[#047857] tabular-nums mt-0.5">
+                      ({formatUSD(resumenPorPuesto.totalComision)})
+                    </span>
+                    {resumenPorPuesto.totalYaPagado > 0 && (
+                      <span className="block text-[9px] text-[#166534] font-semibold tabular-nums leading-tight mt-0.5">
+                        Pagado: {formatUSD(resumenPorPuesto.totalYaPagado)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="bg-white rounded-lg py-1.5 px-1 border border-zinc-200/60">
+                    <span className="block text-[10px] text-[#1E3A3A] font-medium leading-tight">Neto Negocio</span>
+                    <span className="block text-xs font-black text-[#1E3A3A] tabular-nums mt-0.5">
+                      {formatUSD(resumenPorPuesto.totalNeto)}
+                    </span>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 
