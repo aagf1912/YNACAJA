@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { Movimiento, Puesto } from '../types';
+import { Movimiento, normalizarCategoriaGasto, Puesto } from '../types';
 import { calcularMontos } from './format';
 
 export interface CajaDisponibleExport {
@@ -290,10 +290,7 @@ export async function generarYDescargarExcel(params: ExportExcelParams): Promise
         cantGasOp += 1;
       }
 
-      const catKey =
-        (m.categoria as string) === 'Nómina / Sueldos'
-          ? 'Sueldos / Comisiones'
-          : m.categoria || 'Sin categoría';
+      const catKey = normalizarCategoriaGasto(m.categoria, 'Hielo');
       const natLabel = esPersonal ? 'Personal' : 'Gastos';
 
       if (!gastosPorCategoriaMap[catKey]) {
@@ -911,7 +908,7 @@ export async function generarYDescargarExcel(params: ExportExcelParams): Promise
       esVenta ? 'Ingreso / Venta' : 'Gasto / Egreso',
       m.naturaleza || (esVenta ? 'Ventas' : 'Negocio'),
       puestoNombre,
-      m.categoria || (esVenta ? 'Ventas' : 'General'),
+      esVenta ? m.categoria || 'Ventas' : normalizarCategoriaGasto(m.categoria, 'Hielo'),
       metodoNombre,
       m.descripcion || '',
       tasaItem,

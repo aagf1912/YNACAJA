@@ -7,6 +7,8 @@ export type CategoriaMovimiento =
   | 'Nómina / Sueldos'
   | 'Créditos (Cashea / Krece)'
   | 'Materia Prima'
+  | 'Hielo'
+  | 'Vasos'
   | 'Personal / Ocio / Regalos'
   | 'Transporte y Logística'
   | 'Insumos y Empaques'
@@ -14,6 +16,7 @@ export type CategoriaMovimiento =
   | 'Hielo y Varios Operativos'
   | 'Recargas y Servicios'
   | 'Cuota Negocio'
+  | 'Gastos de Emergencia'
   | 'Equipamiento / Maquinaria'
   | 'Sueldos / Comisiones';
 
@@ -79,16 +82,32 @@ export interface ConfigNegocio {
 
 export const CATEGORIAS_GASTO: { nombre: CategoriaMovimiento; naturaleza: NaturalezaMovimiento }[] = [
   { nombre: 'Materia Prima', naturaleza: 'Negocio' },
-  { nombre: 'Hielo y Varios Operativos', naturaleza: 'Negocio' },
-  { nombre: 'Insumos y Empaques', naturaleza: 'Negocio' },
+  { nombre: 'Hielo', naturaleza: 'Negocio' },
+  { nombre: 'Vasos', naturaleza: 'Negocio' },
   { nombre: 'Transporte y Logística', naturaleza: 'Negocio' },
-  { nombre: 'Recargas y Servicios', naturaleza: 'Negocio' },
   { nombre: 'Cuota Negocio', naturaleza: 'Negocio' },
+  { nombre: 'Gastos de Emergencia', naturaleza: 'Negocio' },
   { nombre: 'Equipamiento / Maquinaria', naturaleza: 'Negocio' },
   { nombre: 'Sueldos / Comisiones', naturaleza: 'Negocio' },
   { nombre: 'Personal / Ocio / Regalos', naturaleza: 'Personal' },
   { nombre: 'Comidas y Bebidas', naturaleza: 'Personal' },
 ];
+
+/**
+ * Normaliza categorías históricas de gastos hacia el catálogo vigente de Chicha Adictiva.
+ */
+export function normalizarCategoriaGasto(
+  cat?: string | null,
+  fallback: CategoriaMovimiento = 'Hielo'
+): CategoriaMovimiento {
+  const c = (cat || '').trim();
+  if (!c) return fallback;
+  if (c === 'Hielo y Varios Operativos') return 'Hielo';
+  if (c === 'Insumos y Empaques') return 'Vasos';
+  if (c === 'Recargas y Servicios') return 'Cuota Negocio';
+  if (c === 'Nómina / Sueldos') return 'Sueldos / Comisiones';
+  return c as CategoriaMovimiento;
+}
 
 export interface LiquidacionSemanal {
   id?: string;

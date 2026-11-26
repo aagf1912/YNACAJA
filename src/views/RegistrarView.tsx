@@ -25,6 +25,7 @@ import {
   METODOS_PAGO_LABELS,
   Movimiento,
   NaturalezaMovimiento,
+  normalizarCategoriaGasto,
   Puesto,
   TipoMovimiento,
 } from '../types';
@@ -105,7 +106,7 @@ export const RegistrarView: React.FC<Props> = ({
   );
   const [descripcion, setDescripcion] = useState<string>(() => leerBorrador().descripcion || '');
   const [categoriaGasto, setCategoriaGasto] = useState<CategoriaMovimiento>(
-    () => leerBorrador().categoria || 'Materia Prima'
+    () => normalizarCategoriaGasto(leerBorrador().categoria, 'Materia Prima')
   );
 
   // Estado de feedback y guardado
@@ -122,7 +123,7 @@ export const RegistrarView: React.FC<Props> = ({
 
   // Sugerencias rápidas de descripción según el tipo seleccionado
   const sugerencias = {
-    gastos: ['Hielo y vasos', 'Materia prima', 'Leche condensada', 'Canela / Insumos', 'Flete / Transporte', 'Bolsas y empaques', 'Cuota negocio', 'Mezcladora / Equipo'],
+    gastos: ['Hielo', 'Vasos', 'Materia prima', 'Transporte', 'Cuota negocio', 'Emergencia / Arreglo'],
     personal: ['Retiro personal Ynaides', 'Almuerzo / Comida', 'Gasto personal', 'Ocio / Varios'],
     ventas: ['Venta del día', 'Venta especial evento', 'Venta mayor'],
   };

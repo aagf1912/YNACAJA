@@ -33,7 +33,7 @@ import {
 import { toPng } from 'html-to-image';
 import { Share } from '@capacitor/share';
 import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Movimiento, Puesto, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento, SaldosInicialesCaja, TransferenciaCaja } from '../types';
+import { Movimiento, Puesto, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento, SaldosInicialesCaja, TransferenciaCaja, normalizarCategoriaGasto } from '../types';
 import { calcularMontos, formatNumber, formatPorcentaje, formatUSD, formatVES } from '../utils/format';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
 import { getSemanaLunesSabado, shiftSemana } from '../utils/dateUtils';
@@ -701,10 +701,7 @@ export const BalanceView: React.FC<Props> = ({
     for (const m of movimientosSemanaFiltrados) {
       if (m.tipo === 'gasto' || m.tipo === 'egreso') {
         const { monto_usd, monto_bs } = calcularMontos(m);
-        const catNombre =
-          (m.categoria as string) === 'Nómina / Sueldos'
-            ? 'Sueldos / Comisiones'
-            : (m.categoria || 'Hielo y Varios Operativos');
+        const catNombre = normalizarCategoriaGasto(m.categoria, 'Hielo');
 
         if (!mapa[catNombre]) {
           mapa[catNombre] = {

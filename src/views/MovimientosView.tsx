@@ -13,6 +13,7 @@ import {
   CategoriaMovimiento,
   Movimiento,
   NaturalezaMovimiento,
+  normalizarCategoriaGasto,
   Puesto,
   TipoMovimiento,
 } from '../types';
@@ -137,7 +138,9 @@ export const MovimientosView: React.FC<Props> = ({
       if (busqueda.trim()) {
         const query = busqueda.toLowerCase();
         const matchDesc = m.descripcion.toLowerCase().includes(query);
-        const matchCat = m.categoria.toLowerCase().includes(query);
+        const catNorm = normalizarCategoriaGasto(m.categoria);
+        const matchCat =
+          m.categoria.toLowerCase().includes(query) || catNorm.toLowerCase().includes(query);
         const matchMetodo = (METODOS_PAGO_LABELS[m.metodo_pago] || '').toLowerCase().includes(query);
         const matchPuesto = m.puesto_id && mapaPuestos[m.puesto_id]?.toLowerCase().includes(query);
         if (!matchDesc && !matchCat && !matchMetodo && !matchPuesto) return false;
@@ -206,7 +209,8 @@ export const MovimientosView: React.FC<Props> = ({
           mapaCierres[pId].totalUSD += monto_usd;
           mapaCierres[pId].totalBs += monto_bs;
         } else if (esPagoMixto) {
-          const mixtoKey = `${fecha}__${descRaw}__${m.naturaleza}__${m.categoria}__${m.puesto_id || ''}`;
+          const catNorm = normalizarCategoriaGasto(m.categoria);
+          const mixtoKey = `${fecha}__${descRaw}__${m.naturaleza}__${catNorm}__${m.puesto_id || ''}`;
           if (!mapaMixtos[mixtoKey]) {
             const nombrePuesto = m.puesto?.nombre || (m.puesto_id ? mapaPuestos[m.puesto_id] : null) || null;
             const tasaItem = Number(m.tasa_aplicada) || Number(m.tasa) || tasaDia;
@@ -218,7 +222,7 @@ export const MovimientosView: React.FC<Props> = ({
               descripcion: descRaw,
               descripcionLimpia: descLimpia,
               naturaleza: m.naturaleza,
-              categoria: m.categoria,
+              categoria: catNorm,
               puestoId: m.puesto_id || null,
               puestoNombre: nombrePuesto,
               tasaAplicada: tasaItem,
@@ -833,7 +837,9 @@ export const MovimientosView: React.FC<Props> = ({
                               ? ` · ${
                                   String(item.categoria) === 'Personal / Entretenimiento / Ocio'
                                     ? 'Personal / Ocio'
-                                    : item.categoria
+                                    : esVenta
+                                    ? item.categoria
+                                    : normalizarCategoriaGasto(item.categoria)
                                 }`
                               : ''}
                             {nombrePuesto ? ` · ${nombrePuesto}` : ''}
