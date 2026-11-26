@@ -849,6 +849,11 @@ export const BalanceView: React.FC<Props> = ({
           movimientosFiltrados: movimientosSemanaFiltrados,
           movimientosComisionPeriodo: comisionesFiltradas,
           puestos,
+          cajaDisponible,
+          diasSemana: diasSemana.map((d) => ({
+            fechaStr: d.fechaStr,
+            nombreDia: d.nombreDia,
+          })),
         });
       } else {
         const MESES = [
@@ -892,6 +897,7 @@ export const BalanceView: React.FC<Props> = ({
           movimientosFiltrados: movsFiltrados,
           movimientosComisionPeriodo: comisionesMes,
           puestos,
+          cajaDisponible,
         });
       }
     } catch (err) {
