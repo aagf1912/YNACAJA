@@ -22,10 +22,11 @@ import {
   Lock,
 } from 'lucide-react';
 import { Movimiento, PerfilUsuario } from '../types';
-import { formatNumber, formatUSD, formatVES } from '../utils/format';
+import { formatNumber, formatUSD, formatVES, limpiarInputDecimal } from '../utils/format';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { getSemanaLunesSabado, shiftSemana } from '../utils/dateUtils';
 import { supabase } from '../services/supabase';
+import { obtenerTasaPorFecha } from '../services/bcvService';
 import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
 
 interface Props {
@@ -87,8 +88,10 @@ export const VendedorView: React.FC<Props> = ({
   const fechaSeleccionada = diaSeleccionado === 'hoy' ? fechaHoyVzla : fechaAyerVzla;
   const fechaSeleccionadaTexto = diaSeleccionado === 'hoy' ? `Hoy (${labelHoy})` : `Ayer (${labelAyer})`;
 
-  // Tasa oficial sincronizada con Supabase (tasa_bcv_oficial)
+  // Tasa oficial sincronizada con Supabase (tasa_bcv_oficial) y tasa editable por fecha
   const [tasaEfectiva, setTasaEfectiva] = useState<number>(tasaDia > 0 ? tasaDia : 0);
+  const [tasaInput, setTasaInput] = useState<string>(() => (tasaDia > 0 ? String(tasaDia) : ''));
+  const [buscandoTasa, setBuscandoTasa] = useState<boolean>(false);
 
   // Consultar tasa_bcv_oficial?id=eq.1 al montar la vista
   useEffect(() => {
@@ -303,6 +306,7 @@ export const VendedorView: React.FC<Props> = ({
     let pmBs = 0;
     let ptBs = 0;
     let divUSD = 0;
+    let tasaCierreGuardada = 0;
 
     for (const m of movsFecha) {
       const tipo = (m.tipo || '').toLowerCase();
@@ -312,6 +316,9 @@ export const VendedorView: React.FC<Props> = ({
       const mUSD = Number(m.monto_usd) || (m.moneda_original === 'USD' || m.moneda === 'USD' ? orig : 0);
 
       if (tipo === 'venta' || tipo === 'ingreso') {
+        const tM = Number(m.tasa_bcv ?? m.tasa_aplicada ?? m.tasa ?? 0);
+        if (tM > 0) tasaCierreGuardada = tM;
+
         if (metodo === 'efectivo_bs' || (metodo.includes('efectivo') && !metodo.includes('divisa'))) {
           efBs += mBs || orig;
         } else if (metodo === 'pago_movil' || metodo.includes('pago')) {
@@ -332,13 +339,26 @@ export const VendedorView: React.FC<Props> = ({
       setMontoPagoMovilBs(pmBs > 0 ? String(pmBs) : '');
       setMontoPuntoVentaBs(ptBs > 0 ? String(ptBs) : '');
       setMontoDivisasUSD(divUSD > 0 ? String(divUSD) : '');
+      if (tasaCierreGuardada > 0) {
+        setTasaInput(String(tasaCierreGuardada));
+      }
     } else {
       setMontoEfectivoBs('');
       setMontoPagoMovilBs('');
       setMontoPuntoVentaBs('');
       setMontoDivisasUSD('');
+      const tasaHoyBase = tasaEfectiva > 0 ? tasaEfectiva : tasaDia;
+      setBuscandoTasa(true);
+      try {
+        const tasaHist = await obtenerTasaPorFecha(fechaACargar, tasaHoyBase);
+        if (tasaHist > 0) {
+          setTasaInput(String(tasaHist));
+        }
+      } finally {
+        setBuscandoTasa(false);
+      }
     }
-  }, [movimientos, perfil.puesto_id]);
+  }, [movimientos, perfil.puesto_id, tasaEfectiva, tasaDia]);
 
   // Al montar, cuando se cambie de pestaña o se cambie la fecha seleccionada, sincronizar cierre
   useEffect(() => {
@@ -347,6 +367,13 @@ export const VendedorView: React.FC<Props> = ({
     }
   }, [tabActiva, fechaSeleccionada, cargarCierre]);
 
+  // Tasa BCV activa del cierre (editable por el usuario o detectada automáticamente por fecha)
+  const tasaCierreNum = useMemo(() => {
+    const parsed = parseFloat(tasaInput.replace(',', '.'));
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+    return tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
+  }, [tasaInput, tasaEfectiva, tasaDia]);
+
   // Resumen en vivo de los montos que el vendedor escribe (solo ventas, sin deducciones de gastos)
   const resumenCierre = useMemo(() => {
     const efBs = parseFloat(montoEfectivoBs) || 0;
@@ -354,7 +381,7 @@ export const VendedorView: React.FC<Props> = ({
     const ptBs = parseFloat(montoPuntoVentaBs) || 0;
     const divUSD = parseFloat(montoDivisasUSD) || 0;
 
-    const tasa = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
+    const tasa = tasaCierreNum > 0 ? tasaCierreNum : 1;
     const totalBsVentas = efBs + pmBs + ptBs;
     const totalVendidoUSD = totalBsVentas / tasa + divUSD;
     const totalVendidoBs = totalBsVentas + divUSD * tasa;
@@ -371,7 +398,7 @@ export const VendedorView: React.FC<Props> = ({
       efectivoBsFisico: efBs,
       divisasUSDFisico: divUSD,
     };
-  }, [montoEfectivoBs, montoPagoMovilBs, montoPuntoVentaBs, montoDivisasUSD, tasaEfectiva, tasaDia, comisionPorcentaje]);
+  }, [montoEfectivoBs, montoPagoMovilBs, montoPuntoVentaBs, montoDivisasUSD, tasaCierreNum, comisionPorcentaje]);
 
   // Validar y abrir el modal de confirmación obligatoria antes de guardar
   const handleSolicitarConfirmacion = () => {
@@ -390,6 +417,11 @@ export const VendedorView: React.FC<Props> = ({
     const totalVendido = efBs + pmBs + ptBs + divUSD;
     if (totalVendido <= 0) {
       setMensajeError('Ingresa al menos un monto de venta para guardar el cierre del día.');
+      return;
+    }
+
+    if (isNaN(tasaCierreNum) || tasaCierreNum <= 0) {
+      setMensajeError('Ingresa una tasa BCV válida mayor a 0.');
       return;
     }
 
@@ -425,7 +457,7 @@ export const VendedorView: React.FC<Props> = ({
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     try {
-      const tasa = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
+      const tasa = tasaCierreNum > 0 ? tasaCierreNum : 1;
       const token = getAccessTokenFromStorage() || supabaseAnonKey;
 
       const res = await fetch(`${supabaseUrl}/rest/v1/rpc/guardar_cierre_diario`, {
@@ -803,7 +835,7 @@ export const VendedorView: React.FC<Props> = ({
                     {formatUSD(resumenCierre.comisionUSD)}
                   </div>
                   <span className="text-[10px] text-[#059669]">
-                    Tasa: {formatNumber(tasaEfectiva > 0 ? tasaEfectiva : tasaDia)} Bs/$
+                    Tasa: {formatNumber(tasaCierreNum)} Bs/$
                   </span>
                 </div>
               </div>
@@ -848,6 +880,36 @@ export const VendedorView: React.FC<Props> = ({
                 <span className="block text-xs font-bold text-[#18181B] uppercase tracking-wide pb-1 border-b border-[#E4E4E7]">
                   Ventas del Día ({fechaSeleccionadaTexto})
                 </span>
+
+                {/* Campo editable de Tasa BCV del día */}
+                <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-[#18181B]">
+                      Tasa BCV del día (Bs/$)
+                    </label>
+                    {buscandoTasa && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#2C474E] bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                        <Loader2 size={10} className="animate-spin" />
+                        <span>Buscando tasa...</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      value={tasaInput}
+                      onChange={(e) => setTasaInput(limpiarInputDecimal(e.target.value))}
+                      disabled={ayerBloqueado || guardando}
+                      placeholder="0.00"
+                      className="w-full p-2.5 pr-12 text-sm font-mono font-bold border border-[#D4D4D8] rounded-md bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none disabled:bg-zinc-100 disabled:text-zinc-400"
+                    />
+                    <span className="absolute right-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
+                      Bs/$
+                    </span>
+                  </div>
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {/* Efectivo Bs */}
@@ -967,7 +1029,7 @@ export const VendedorView: React.FC<Props> = ({
                       {formatUSD(resumenCierre.totalVendidoUSD)}
                     </div>
                     <span className="text-[10px] text-[#047857]">
-                      Tasa: {formatNumber(tasaEfectiva > 0 ? tasaEfectiva : tasaDia)} Bs/$
+                      Tasa: {formatNumber(tasaCierreNum)} Bs/$
                     </span>
                   </div>
 

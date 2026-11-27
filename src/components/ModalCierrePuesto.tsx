@@ -12,9 +12,10 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { Movimiento, Puesto } from '../types';
-import { formatNumber, formatUSD, formatVES } from '../utils/format';
+import { formatNumber, formatUSD, formatVES, limpiarInputDecimal } from '../utils/format';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
+import { obtenerTasaPorFecha } from '../services/bcvService';
 
 interface Props {
   isOpen: boolean;
@@ -45,6 +46,7 @@ export const ModalCierrePuesto: React.FC<Props> = ({
   const [montoDivisasUSD, setMontoDivisasUSD] = useState<string>('');
 
   const [tieneCierrePrevio, setTieneCierrePrevio] = useState<boolean>(false);
+  const [buscandoTasa, setBuscandoTasa] = useState<boolean>(false);
   const [guardando, setGuardando] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -141,6 +143,16 @@ export const ModalCierrePuesto: React.FC<Props> = ({
         setMontoDivisasUSD(divUSD > 0 ? String(divUSD) : '');
         if (tasaCierre > 0) {
           setTasaInput(String(tasaCierre));
+        } else {
+          setBuscandoTasa(true);
+          try {
+            const tasaHist = await obtenerTasaPorFecha(fecha, tasaActual);
+            if (!cancelado) {
+              setTasaInput(tasaHist > 0 ? String(tasaHist) : '100');
+            }
+          } finally {
+            if (!cancelado) setBuscandoTasa(false);
+          }
         }
         setTieneCierrePrevio(true);
       } else {
@@ -148,8 +160,16 @@ export const ModalCierrePuesto: React.FC<Props> = ({
         setMontoPagoMovilBs('');
         setMontoPuntoVentaBs('');
         setMontoDivisasUSD('');
-        setTasaInput(tasaActual > 0 ? String(tasaActual) : '100');
         setTieneCierrePrevio(false);
+        setBuscandoTasa(true);
+        try {
+          const tasaHist = await obtenerTasaPorFecha(fecha, tasaActual);
+          if (!cancelado) {
+            setTasaInput(tasaHist > 0 ? String(tasaHist) : '100');
+          }
+        } finally {
+          if (!cancelado) setBuscandoTasa(false);
+        }
       }
     };
 
@@ -165,7 +185,7 @@ export const ModalCierrePuesto: React.FC<Props> = ({
   // Cálculos en vivo
   const puestoSeleccionado = puestos.find((p) => p.id === puestoId);
   const comisionPorcentaje = puestoSeleccionado?.comision_porcentaje ?? puestoSeleccionado?.porcentaje_comision ?? 10;
-  const tasaNum = parseFloat(tasaInput) || tasaActual || 100;
+  const tasaNum = parseFloat(tasaInput.replace(',', '.')) || tasaActual || 100;
 
   const efBs = parseFloat(montoEfectivoBs) || 0;
   const pmBs = parseFloat(montoPagoMovilBs) || 0;
@@ -342,15 +362,24 @@ export const ModalCierrePuesto: React.FC<Props> = ({
 
           {/* Input Tasa BCV */}
           <div>
-            <label className="block text-xs font-bold text-[#18181B] mb-1">
-              Tasa BCV Aplicada (Bs/$):
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-bold text-[#18181B]">
+                Tasa BCV del día (Bs/$):
+              </label>
+              {buscandoTasa && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#2C474E] bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                  <Loader2 size={10} className="animate-spin" />
+                  <span>Buscando tasa...</span>
+                </span>
+              )}
+            </div>
             <div className="relative">
               <input
-                type="number"
-                step="any"
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
                 value={tasaInput}
-                onChange={(e) => setTasaInput(e.target.value)}
+                onChange={(e) => setTasaInput(limpiarInputDecimal(e.target.value))}
                 placeholder="0.00"
                 className="w-full p-2.5 text-xs font-mono font-bold border border-zinc-300 rounded-lg bg-white text-[#18181B] focus:ring-2 focus:ring-[#2C474E] focus:outline-none"
                 required
