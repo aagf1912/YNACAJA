@@ -31,6 +31,7 @@ import {
   Cell,
 } from 'recharts';
 import { toPng } from 'html-to-image';
+import { Capacitor } from '@capacitor/core';
 import { Share } from '@capacitor/share';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Movimiento, Puesto, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento, SaldosInicialesCaja, TransferenciaCaja, normalizarCategoriaGasto } from '../types';
@@ -905,7 +906,7 @@ export const BalanceView: React.FC<Props> = ({
     }
   };
 
-  // Compartir Imagen con html-to-image y Capacitor Share
+  // Compartir Imagen con html-to-image y Capacitor Share (APK nativo) / descarga en Web
   const compartirImagen = async () => {
     if (!reportRef.current) return;
     try {
@@ -917,31 +918,34 @@ export const BalanceView: React.FC<Props> = ({
         pixelRatio: 2,
       });
 
-      const fileName = `Balance_ChichaAdictiva_${diasSemana[0].fechaStr}.png`;
+      const fileName =
+        periodo === 'semanal'
+          ? `Balance_ChichaAdictiva_${diasSemana[0].fechaStr}.png`
+          : `Balance_Mensual_ChichaAdictiva_${fechaMes.getFullYear()}-${String(fechaMes.getMonth() + 1).padStart(2, '0')}.png`;
 
-      try {
+      if (Capacitor.isNativePlatform()) {
+        const base64Data = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
         const savedFile = await Filesystem.writeFile({
           path: fileName,
-          data: dataUrl,
+          data: base64Data,
           directory: Directory.Cache,
         });
 
         await Share.share({
-          title: 'Balance Semanal - Chicha Adictiva',
-          text: `Balance semanal del ${rangoTexto} (${nombreFiltroPuesto}) — Chicha Adictiva`,
+          title: 'Balance Financiero - Chicha Adictiva',
+          text: `Balance (${periodo === 'semanal' ? rangoTexto : `${fechaMes.getMonth() + 1}/${fechaMes.getFullYear()}`}) · ${nombreFiltroPuesto} — Chicha Adictiva`,
           url: savedFile.uri,
-          dialogTitle: 'Compartir Balance Semanal',
+          dialogTitle: 'Compartir Balance',
         });
-        setCompartiendo(false);
         return;
-      } catch {
-        // Fallback web
       }
 
       const link = document.createElement('a');
       link.download = fileName;
       link.href = dataUrl;
+      document.body.appendChild(link);
       link.click();
+      document.body.removeChild(link);
     } catch (err) {
       console.error('Error generando imagen:', err);
       alert('No se pudo generar la imagen del reporte.');

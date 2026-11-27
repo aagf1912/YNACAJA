@@ -1,4 +1,7 @@
 import ExcelJS from 'exceljs';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 import { Movimiento, normalizarCategoriaGasto, Puesto } from '../types';
 import { calcularMontos } from './format';
 
@@ -946,17 +949,45 @@ export async function generarYDescargarExcel(params: ExportExcelParams): Promise
 
   autoFitColumns(wsMovs, [1]);
 
+function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array): string {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
   // ====================================================================
-  // GENERAR Y DESCARGAR ARCHIVO .XLSX
+  // GENERAR Y DESCARGAR / COMPARTIR ARCHIVO .XLSX
   // ====================================================================
   const buffer = await wb.xlsx.writeBuffer();
+  const fileNameFinal = nombreArchivo.endsWith('.xlsx') ? nombreArchivo : `${nombreArchivo}.xlsx`;
+
+  if (Capacitor.isNativePlatform()) {
+    const base64Data = arrayBufferToBase64(buffer as ArrayBuffer);
+    const savedFile = await Filesystem.writeFile({
+      path: fileNameFinal,
+      data: base64Data,
+      directory: Directory.Cache,
+    });
+
+    await Share.share({
+      title: fileNameFinal,
+      url: savedFile.uri,
+      dialogTitle: 'Compartir o guardar reporte Excel',
+    });
+    return;
+  }
+
   const blob = new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = nombreArchivo.endsWith('.xlsx') ? nombreArchivo : `${nombreArchivo}.xlsx`;
+  link.download = fileNameFinal;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
