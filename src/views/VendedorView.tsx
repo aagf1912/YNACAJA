@@ -204,13 +204,15 @@ export const VendedorView: React.FC<Props> = ({
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          // Filtrar estrictamente solo Sueldos / Comisiones asignados a este puesto
+          // Filtrar estrictamente solo Sueldos / Comisiones y Descuentos por Tardanza asignados a este puesto
           // Ocultando cualquier otro gasto o retiro del negocio por privacidad del administrador
           const filtrados = data.filter(
             (item: any) =>
               item.puesto_id === perfil.puesto_id &&
               item.tipo === 'gasto' &&
-              (item.categoria === 'Sueldos / Comisiones' || item.categoria === 'Nómina / Sueldos')
+              (item.categoria === 'Sueldos / Comisiones' ||
+                item.categoria === 'Nómina / Sueldos' ||
+                item.categoria === 'Descuento Tardanza')
           );
           setAdelantosMovimientos(filtrados);
           return;
@@ -222,7 +224,9 @@ export const VendedorView: React.FC<Props> = ({
         (item) =>
           item.puesto_id === perfil.puesto_id &&
           item.tipo === 'gasto' &&
-          (item.categoria === 'Sueldos / Comisiones' || item.categoria === 'Nómina / Sueldos')
+          (item.categoria === 'Sueldos / Comisiones' ||
+            item.categoria === 'Nómina / Sueldos' ||
+            item.categoria === 'Descuento Tardanza')
       );
       setAdelantosMovimientos(filtradosProps);
     } catch (err: any) {
@@ -233,7 +237,9 @@ export const VendedorView: React.FC<Props> = ({
         (item) =>
           item.puesto_id === perfil.puesto_id &&
           item.tipo === 'gasto' &&
-          (item.categoria === 'Sueldos / Comisiones' || item.categoria === 'Nómina / Sueldos')
+          (item.categoria === 'Sueldos / Comisiones' ||
+            item.categoria === 'Nómina / Sueldos' ||
+            item.categoria === 'Descuento Tardanza')
       );
       setAdelantosMovimientos(filtradosProps);
     } finally {
@@ -547,10 +553,12 @@ export const VendedorView: React.FC<Props> = ({
     );
   }, [adelantosMovimientos, infoSemanaGanancias.semanaInicio, fechaDomingoSemanaGanancias]);
 
-  // Sumatoria de montos pagados en USD y en Bs en la semana seleccionada (consultando public.movimientos)
-  const { yaPagadoSemanaUSD, yaPagadoSemanaBs, tasaCobroPromedio } = useMemo(() => {
+  // Sumatoria de montos pagados (adelantos/pagos) y descuentos por tardanza en la semana seleccionada
+  const { yaPagadoSemanaUSD, yaPagadoSemanaBs, tardanzasSemanaUSD, tardanzasSemanaBs, tasaCobroPromedio } = useMemo(() => {
     let sumUSD = 0;
     let sumBs = 0;
+    let sumTardUSD = 0;
+    let sumTardBs = 0;
     const tasaActual = tasaEfectiva > 0 ? tasaEfectiva : (tasaDia > 0 ? tasaDia : 1);
 
     for (const m of adelantosSemanaGanancias) {
@@ -567,17 +575,26 @@ export const VendedorView: React.FC<Props> = ({
         mUSD = tasaM > 0 ? orig / tasaM : 0;
       }
 
-      sumUSD += mUSD;
-      sumBs += mBs;
+      if (m.categoria === 'Descuento Tardanza') {
+        sumTardUSD += mUSD;
+        sumTardBs += mBs;
+      } else {
+        sumUSD += mUSD;
+        sumBs += mBs;
+      }
     }
 
     sumUSD = Math.round(sumUSD * 100) / 100;
     sumBs = Math.round(sumBs * 100) / 100;
+    sumTardUSD = Math.round(sumTardUSD * 100) / 100;
+    sumTardBs = Math.round(sumTardBs * 100) / 100;
     const tasaProm = sumUSD > 0 && sumBs > 0 ? Math.round((sumBs / sumUSD) * 100) / 100 : 0;
 
     return {
       yaPagadoSemanaUSD: sumUSD,
       yaPagadoSemanaBs: sumBs,
+      tardanzasSemanaUSD: sumTardUSD,
+      tardanzasSemanaBs: sumTardBs,
       tasaCobroPromedio: tasaProm,
     };
   }, [adelantosSemanaGanancias, tasaEfectiva, tasaDia]);
@@ -663,10 +680,10 @@ export const VendedorView: React.FC<Props> = ({
     return metodo;
   };
 
-  // Saldo pendiente por cobrar en la semana
+  // Saldo neto pendiente por cobrar en la semana (Comisión Bruta - Adelantos - Descuentos por Tardanza)
   const pendienteSemanaUSD = useMemo(() => {
-    return Math.max(0, Number((comisionSemanaUSD - yaPagadoSemanaUSD).toFixed(2)));
-  }, [comisionSemanaUSD, yaPagadoSemanaUSD]);
+    return Math.max(0, Number((comisionSemanaUSD - yaPagadoSemanaUSD - tardanzasSemanaUSD).toFixed(2)));
+  }, [comisionSemanaUSD, yaPagadoSemanaUSD, tardanzasSemanaUSD]);
 
   // Día seleccionado en el gráfico interactivo de Mis Ganancias (0 a 5)
   const [diaGananciasIndex, setDiaGananciasIndex] = useState<number>(0);
@@ -1140,7 +1157,7 @@ export const VendedorView: React.FC<Props> = ({
               <div>
                 <span className="text-xs text-emerald-300/90 block mb-1 font-semibold flex items-center gap-1.5">
                   <Sparkles size={14} className="text-[#86EFAC]" />
-                  Ganancia Generada ({comisionPorcentaje}%):
+                  Comisión Bruta ({comisionPorcentaje}%):
                 </span>
                 <div className="text-3xl sm:text-4xl font-black tabular-nums text-[#86EFAC] font-mono tracking-tight">
                   {formatUSD(comisionSemanaUSD)}
@@ -1152,44 +1169,38 @@ export const VendedorView: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="sm:text-right">
+              <div className="sm:text-right flex flex-col items-start sm:items-end gap-1.5">
+                {yaPagadoSemanaUSD > 0 && (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full bg-[#166534] text-white border border-[#22c55e] shadow-xs">
+                    <CheckCircle2 size={13} />
+                    <span>Adelantos: -{formatUSD(yaPagadoSemanaUSD)} ({formatVES(yaPagadoSemanaBs)})</span>
+                  </span>
+                )}
+                {tardanzasSemanaUSD > 0 && (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/50">
+                    <Clock size={13} />
+                    <span>Descuentos por Tardanza: -{formatUSD(tardanzasSemanaUSD)} ({formatVES(tardanzasSemanaBs)})</span>
+                  </span>
+                )}
                 {pendienteSemanaUSD === 0 && comisionSemanaUSD > 0 ? (
-                  <div className="flex flex-col items-start sm:items-end gap-1">
-                    <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-[#166534] text-white border border-[#22c55e] shadow-xs">
-                      <CheckCircle2 size={14} />
-                      <span>Pagado al 100% ✓</span>
-                    </span>
-                    {yaPagadoSemanaBs > 0 && (
-                      <span className="text-[11px] text-[#86EFAC] font-mono mt-0.5 font-semibold">
-                        Ya Pagado: {formatUSD(yaPagadoSemanaUSD)} ({formatVES(yaPagadoSemanaBs)})
-                      </span>
-                    )}
-                  </div>
-                ) : yaPagadoSemanaUSD > 0 && pendienteSemanaUSD > 0 ? (
-                  <div className="flex flex-col items-start sm:items-end gap-1.5">
-                    <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full bg-[#166534] text-white border border-[#22c55e] shadow-xs">
-                      <CheckCircle2 size={13} />
-                      <span>Ya Pagado: {formatUSD(yaPagadoSemanaUSD)} ({formatVES(yaPagadoSemanaBs)})</span>
-                    </span>
-                    <span className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40">
-                      <Clock size={12} />
-                      <span>Pendiente: {formatUSD(pendienteSemanaUSD)}</span>
-                    </span>
-                  </div>
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-[#166534] text-white border border-[#22c55e] shadow-xs">
+                    <CheckCircle2 size={14} />
+                    <span>Neto a Cobrar: $0.00 (Saldado ✓)</span>
+                  </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40">
-                    <Clock size={14} />
-                    <span>Pendiente: {formatUSD(comisionSemanaUSD)}</span>
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full bg-white/10 text-white border border-white/20">
+                    <Clock size={14} className="text-[#86EFAC]" />
+                    <span>Neto a Cobrar: {formatUSD(pendienteSemanaUSD)}</span>
                   </span>
                 )}
               </div>
             </div>
 
-            {/* HISTORIAL DE ABONOS / PAGOS DE LA SEMANA */}
+            {/* HISTORIAL DE ABONOS / PAGOS Y TARDANZAS DE LA SEMANA */}
             <div className="mt-4 pt-3.5 border-t border-white/10 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase font-bold text-emerald-300/90 tracking-wider block">
-                  Historial de Abonos / Pagos:
+                  Historial de Abonos y Descuentos:
                 </span>
                 {adelantosSemanaGanancias.length > 0 && (
                   <span className="text-[10px] font-mono font-bold text-[#86EFAC] bg-white/10 px-2 py-0.5 rounded border border-white/10">
@@ -1200,7 +1211,7 @@ export const VendedorView: React.FC<Props> = ({
 
               {adelantosSemanaGanancias.length === 0 ? (
                 <div className="text-xs text-zinc-400 bg-white/5 border border-white/5 rounded-lg px-3 py-2.5 text-center font-medium italic">
-                  Sin adelantos ni pagos registrados esta semana
+                  Sin adelantos ni descuentos registrados esta semana
                 </div>
               ) : (
                 <div className="space-y-1.5">
@@ -1219,35 +1230,49 @@ export const VendedorView: React.FC<Props> = ({
                       mUSD = tasaM > 0 ? orig / tasaM : 0;
                     }
 
-                    const concepto = ad.descripcion?.trim() || 'Adelanto';
-                    const metodoLabel = getMetodoPagoLabel(ad.metodo_pago);
+                    const esTardanza = ad.categoria === 'Descuento Tardanza';
+                    const concepto = ad.descripcion?.trim() || (esTardanza ? 'Descuento por tardanza' : 'Adelanto');
+                    const metodoLabel = esTardanza ? 'Descuento Tardanza' : getMetodoPagoLabel(ad.metodo_pago);
                     const fechaStr = ad.fecha || 'Fecha n/d';
 
                     return (
                       <div
                         key={ad.id || `adelanto-${idx}`}
-                        className="bg-white/5 hover:bg-white/[0.08] border border-white/10 rounded-lg p-2.5 sm:p-3 flex items-center justify-between gap-3 transition-colors"
+                        className={`rounded-lg p-2.5 sm:p-3 flex items-center justify-between gap-3 transition-colors border ${
+                          esTardanza
+                            ? 'bg-amber-500/10 border-amber-400/30 hover:bg-amber-500/15'
+                            : 'bg-white/5 hover:bg-white/[0.08] border-white/10'
+                        }`}
                       >
                         <div className="min-w-0 flex-1">
                           {/* Descripción / Concepto */}
-                          <div className="text-xs sm:text-sm font-bold text-white truncate">
-                            {concepto}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {esTardanza && (
+                              <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/40 shrink-0">
+                                Tardanza
+                              </span>
+                            )}
+                            <span className="text-xs sm:text-sm font-bold text-white truncate">
+                              {concepto}
+                            </span>
                           </div>
                           {/* Fecha y Método de pago */}
                           <div className="text-[11px] text-zinc-300 font-medium mt-0.5 flex items-center gap-1.5 flex-wrap">
                             <span className="font-mono text-zinc-200">{fechaStr}</span>
                             <span className="text-zinc-500">·</span>
-                            <span className="text-emerald-300 font-medium">{metodoLabel}</span>
+                            <span className={esTardanza ? 'text-amber-300 font-medium' : 'text-emerald-300 font-medium'}>
+                              {metodoLabel}
+                            </span>
                           </div>
                         </div>
 
                         {/* Monto exacto en USD ($) y Bolívares (Bs) con su tasa BCV */}
                         <div className="text-right shrink-0">
-                          <div className="text-xs sm:text-sm font-bold font-mono text-white tabular-nums">
-                            {formatUSD(mUSD)}
+                          <div className={`text-xs sm:text-sm font-bold font-mono tabular-nums ${esTardanza ? 'text-amber-300' : 'text-white'}`}>
+                            -{formatUSD(mUSD)}
                           </div>
-                          <div className="text-[11px] font-semibold text-[#86EFAC] font-mono tabular-nums mt-0.5">
-                            {formatVES(mBs)}
+                          <div className={`text-[11px] font-semibold font-mono tabular-nums mt-0.5 ${esTardanza ? 'text-amber-200/80' : 'text-[#86EFAC]'}`}>
+                            -{formatVES(mBs)}
                           </div>
                           {tasaM > 0 && (
                             <div className="text-[10px] text-zinc-400 font-sans tabular-nums mt-0.5">

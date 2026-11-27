@@ -257,6 +257,7 @@ export async function generarYDescargarExcel(params: ExportExcelParams): Promise
   > = {};
 
   for (const m of movimientosFiltrados) {
+    if (m.categoria === 'Descuento Tardanza') continue;
     const { monto_usd, monto_bs } = calcularMontos(m);
     if (m.tipo === 'venta' || m.tipo === 'ingreso') {
       ingUSD += monto_usd;
@@ -685,6 +686,7 @@ export async function generarYDescargarExcel(params: ExportExcelParams): Promise
       let dGasOp = 0;
       let dRetPers = 0;
       for (const m of movsDia) {
+        if (m.categoria === 'Descuento Tardanza') continue;
         const { monto_usd } = calcularMontos(m);
         if (m.tipo === 'venta' || m.tipo === 'ingreso') {
           dIng += monto_usd;

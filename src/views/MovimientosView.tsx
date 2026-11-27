@@ -168,6 +168,7 @@ export const MovimientosView: React.FC<Props> = ({
       let totalGastosUSD = 0;
 
       for (const item of items) {
+        if (item.categoria === 'Descuento Tardanza') continue;
         const { monto_usd } = calcularMontos(item);
         if (item.tipo === 'venta' || item.tipo === 'ingreso') {
           totalIngresosUSD += monto_usd;
@@ -792,6 +793,7 @@ export const MovimientosView: React.FC<Props> = ({
                     item.puesto?.nombre || (item.puesto_id ? mapaPuestos[item.puesto_id] : null);
                   const { monto_usd, monto_bs } = calcularMontos(item);
                   const esVenta = item.tipo === 'venta' || item.tipo === 'ingreso';
+                  const esTardanza = item.categoria === 'Descuento Tardanza';
                   const esUSD = item.moneda_original === 'USD';
                   const signo = esVenta ? '+' : '-';
                   const metodoLabel = METODOS_PAGO_LABELS[item.metodo_pago] || item.metodo_pago;
@@ -800,7 +802,9 @@ export const MovimientosView: React.FC<Props> = ({
                   return (
                     <div
                       key={item.id}
-                      className="p-3.5 hover:bg-zinc-50/70 transition-colors"
+                      className={`p-3.5 transition-colors ${
+                        esTardanza ? 'bg-amber-50/35 hover:bg-amber-50/60' : 'hover:bg-zinc-50/70'
+                      }`}
                     >
                       {/* Línea 1: Descripción clara a la izquierda + Monto principal (y equivalente sutil debajo) a la derecha */}
                       <div className="flex items-start justify-between gap-3">
@@ -810,7 +814,11 @@ export const MovimientosView: React.FC<Props> = ({
                         <div className="text-right shrink-0">
                           <span
                             className={`block text-xs sm:text-sm font-bold tabular-nums whitespace-nowrap leading-snug ${
-                              esVenta ? 'text-[#166534]' : 'text-[#991B1B]'
+                              esVenta
+                                ? 'text-[#166534]'
+                                : esTardanza
+                                ? 'text-amber-700'
+                                : 'text-[#991B1B]'
                             }`}
                           >
                             {esUSD
@@ -826,14 +834,20 @@ export const MovimientosView: React.FC<Props> = ({
                       {/* Línea 2: Badge suave + metadatos separados por puntos · + Íconos discretos a la derecha */}
                       <div className="flex items-start justify-between gap-2 mt-1.5">
                         <div className="flex items-center gap-x-1.5 gap-y-1 min-w-0 flex-1 flex-wrap">
-                          <BadgeNaturaleza
-                            naturaleza={item.naturaleza}
-                            tipo={item.tipo}
-                            className="shrink-0"
-                          />
+                          {esTardanza ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+                              Tardanza
+                            </span>
+                          ) : (
+                            <BadgeNaturaleza
+                              naturaleza={item.naturaleza}
+                              tipo={item.tipo}
+                              className="shrink-0"
+                            />
+                          )}
                           <span className="text-[11px] text-zinc-500 leading-snug">
-                            {metodoLabel}
-                            {item.categoria
+                            {esTardanza ? 'Retención de comisión' : metodoLabel}
+                            {!esTardanza && item.categoria
                               ? ` · ${
                                   String(item.categoria) === 'Personal / Entretenimiento / Ocio'
                                     ? 'Personal / Ocio'

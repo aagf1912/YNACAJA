@@ -16,6 +16,7 @@ import {
   X,
   Smartphone,
   Banknote,
+  Clock,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -35,11 +36,12 @@ import { Capacitor } from '@capacitor/core';
 import { Share } from '@capacitor/share';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Movimiento, Puesto, CATEGORIAS_GASTO, NaturalezaMovimiento, CategoriaMovimiento, SaldosInicialesCaja, TransferenciaCaja, normalizarCategoriaGasto } from '../types';
-import { calcularMontos, formatNumber, formatPorcentaje, formatUSD, formatVES } from '../utils/format';
+import { calcularMontos, formatNumber, formatPorcentaje, formatUSD, formatVES, limpiarInputDecimal } from '../utils/format';
 import { BadgeNaturaleza } from '../components/BadgeNaturaleza';
 import { getSemanaLunesSabado, shiftSemana } from '../utils/dateUtils';
 import { getVenezuelaDate } from '../utils/parserLocal';
 import { insertMovimientos } from '../services/supabase';
+import { obtenerTasaPorFecha } from '../services/bcvService';
 import { supabaseUrl, supabaseAnonKey, getAccessTokenFromStorage } from '../lib/supabase';
 import { CajaDisponibleCard } from '../components/CajaDisponibleCard';
 import { ModalSaldoInicial } from '../components/ModalSaldoInicial';
@@ -241,6 +243,7 @@ export const BalanceView: React.FC<Props> = ({
     const baseMovs = movimientosHistoricos.length > 0 ? movimientosHistoricos : movimientos;
 
     for (const m of baseMovs) {
+      if (m.categoria === 'Descuento Tardanza') continue;
       const tipoNorm = (m.tipo || '').toString().toLowerCase().trim();
       const esVenta = tipoNorm === 'venta' || tipoNorm === 'ingreso';
       const esGasto = tipoNorm === 'gasto' || tipoNorm === 'egreso';
@@ -339,7 +342,7 @@ export const BalanceView: React.FC<Props> = ({
     );
   }, [movimientosHistoricos, movimientos, infoSemana.semanaInicio, infoSemana.semanaFin]);
 
-  // Movimientos de pago/adelanto de comisiones dentro de la semana completa (Lunes a Domingo)
+  // Movimientos de pago/adelanto de comisiones y descuentos por tardanza dentro de la semana completa (Lunes a Domingo)
   const movimientosComisionSemana = useMemo(() => {
     const base = movimientosHistoricos.length > 0 ? movimientosHistoricos : movimientos;
     return base.filter(
@@ -347,7 +350,9 @@ export const BalanceView: React.FC<Props> = ({
         m.fecha >= infoSemana.semanaInicio &&
         m.fecha <= fechaDomingoSemana &&
         m.tipo === 'gasto' &&
-        (m.categoria === 'Sueldos / Comisiones' || m.categoria === 'Nómina / Sueldos')
+        (m.categoria === 'Sueldos / Comisiones' ||
+          m.categoria === 'Nómina / Sueldos' ||
+          m.categoria === 'Descuento Tardanza')
     );
   }, [movimientosHistoricos, movimientos, infoSemana.semanaInicio, fechaDomingoSemana]);
 
@@ -460,6 +465,97 @@ export const BalanceView: React.FC<Props> = ({
     }
   };
 
+  // ======================================================================
+  // MODAL Y LÓGICA: DESCUENTO POR TARDANZA (sin afectar caja/banco)
+  // ======================================================================
+  const [tardanzaModalData, setTardanzaModalData] = useState<{
+    puestoId: string;
+    puestoNombre: string;
+  } | null>(null);
+  const [tardanzaFecha, setTardanzaFecha] = useState<string>(() => getVenezuelaDate());
+  const [tardanzaMontoUSD, setTardanzaMontoUSD] = useState<string>('1.00');
+  const [tardanzaTasa, setTardanzaTasa] = useState<string>('');
+  const [tardanzaMotivo, setTardanzaMotivo] = useState<string>('');
+  const [buscandoTasaTardanza, setBuscandoTasaTardanza] = useState<boolean>(false);
+  const [guardandoTardanza, setGuardandoTardanza] = useState<boolean>(false);
+
+  const handleAbrirModalTardanza = (p: { id: string; nombre: string }) => {
+    if (p.id === 'sin-puesto') return;
+    const hoyVzla = getVenezuelaDate();
+    setTardanzaFecha(hoyVzla);
+    setTardanzaMontoUSD('1.00');
+    setTardanzaTasa(tasaActual > 0 ? String(tasaActual) : '100');
+    setTardanzaMotivo('');
+    setTardanzaModalData({ puestoId: p.id, puestoNombre: p.nombre });
+  };
+
+  useEffect(() => {
+    if (!tardanzaModalData || !tardanzaFecha) return;
+    let cancelado = false;
+    const cargarTasa = async () => {
+      setBuscandoTasaTardanza(true);
+      try {
+        const t = await obtenerTasaPorFecha(tardanzaFecha, tasaActual);
+        if (!cancelado && t > 0) {
+          setTardanzaTasa(String(t));
+        }
+      } finally {
+        if (!cancelado) setBuscandoTasaTardanza(false);
+      }
+    };
+    cargarTasa();
+    return () => {
+      cancelado = true;
+    };
+  }, [tardanzaModalData, tardanzaFecha, tasaActual]);
+
+  const handleConfirmarTardanza = async () => {
+    if (!tardanzaModalData || guardandoTardanza) return;
+
+    const montoUSDNum = parseFloat(tardanzaMontoUSD.replace(',', '.'));
+    if (isNaN(montoUSDNum) || montoUSDNum <= 0) {
+      alert('Ingresa un monto de descuento en USD ($) mayor a 0.');
+      return;
+    }
+
+    const tasaNum = parseFloat(tardanzaTasa.replace(',', '.')) || tasaActual || 100;
+    const montoBsCalculado = Math.round(montoUSDNum * tasaNum * 100) / 100;
+    const descFinal = tardanzaMotivo.trim() || 'Descuento por tardanza';
+
+    setGuardandoTardanza(true);
+    try {
+      await insertMovimientos([
+        {
+          fecha: tardanzaFecha,
+          descripcion: descFinal,
+          tipo: 'gasto',
+          naturaleza: 'Negocio',
+          categoria: 'Descuento Tardanza',
+          metodo_pago: 'efectivo_bs',
+          moneda_original: 'USD',
+          moneda: 'USD',
+          monto_original: montoUSDNum,
+          tasa_aplicada: tasaNum,
+          tasa: tasaNum,
+          monto_usd: montoUSDNum,
+          monto_bs: montoBsCalculado,
+          puesto_id: tardanzaModalData.puestoId,
+        },
+      ]);
+
+      setTardanzaModalData(null);
+      await cargarDatosCajaYMovimientos();
+      if (onRecargarDatos) {
+        await onRecargarDatos();
+      }
+    } catch (err: any) {
+      console.error('Error al registrar descuento por tardanza:', err);
+      alert(err?.message || 'Error al guardar el descuento por tardanza.');
+    } finally {
+      setGuardandoTardanza(false);
+    }
+  };
+
   // Movimientos de la semana filtrados por puesto (si está activo un filtro)
   const movimientosSemanaFiltrados = useMemo(() => {
     if (filtroPuesto === 'todos') return movimientosSemana;
@@ -492,6 +588,7 @@ export const BalanceView: React.FC<Props> = ({
     let gasBs = 0;
 
     for (const m of movimientosSemanaFiltrados) {
+      if (m.categoria === 'Descuento Tardanza') continue;
       const { monto_usd, monto_bs } = calcularMontos(m);
       if (m.tipo === 'venta' || m.tipo === 'ingreso') {
         ingUSD += monto_usd;
@@ -541,20 +638,33 @@ export const BalanceView: React.FC<Props> = ({
       const comisionUSD = Math.round(((totalUSD * pct) / 100) * 100) / 100;
       const netoUSD = Math.round((totalUSD - comisionUSD) * 100) / 100;
 
-      // Pagos de comisión y adelantos registrados exclusivamente en public.movimientos
-      const pagosMovsPuesto = movimientosComisionSemana.filter((m) => m.puesto_id === p.id);
+      // Pagos de comisión, adelantos y descuentos por tardanza registrados exclusivamente en public.movimientos
+      const movsComPuesto = movimientosComisionSemana.filter((m) => m.puesto_id === p.id);
 
       let yaPagadoUsd = 0;
       let yaPagadoBs = 0;
-      for (const m of pagosMovsPuesto) {
+      let tardanzasUsd = 0;
+      let tardanzasBs = 0;
+
+      for (const m of movsComPuesto) {
         const { monto_usd, monto_bs } = calcularMontos(m);
-        yaPagadoUsd += monto_usd;
-        yaPagadoBs += monto_bs;
+        if (m.categoria === 'Descuento Tardanza') {
+          tardanzasUsd += monto_usd;
+          tardanzasBs += monto_bs;
+        } else {
+          yaPagadoUsd += monto_usd;
+          yaPagadoBs += monto_bs;
+        }
       }
       yaPagadoUsd = Math.round(yaPagadoUsd * 100) / 100;
       yaPagadoBs = Math.round(yaPagadoBs * 100) / 100;
+      tardanzasUsd = Math.round(tardanzasUsd * 100) / 100;
+      tardanzasBs = Math.round(tardanzasBs * 100) / 100;
 
-      const pendienteUsd = Math.max(0, Number((comisionUSD - yaPagadoUsd).toFixed(2)));
+      const pendienteUsd = Math.max(
+        0,
+        Number((comisionUSD - yaPagadoUsd - tardanzasUsd).toFixed(2))
+      );
 
       return {
         id: p.id,
@@ -567,6 +677,8 @@ export const BalanceView: React.FC<Props> = ({
         netoUSD,
         yaPagadoUsd,
         yaPagadoBs,
+        tardanzasUsd,
+        tardanzasBs,
         pendienteUsd,
       };
     });
@@ -594,6 +706,8 @@ export const BalanceView: React.FC<Props> = ({
         netoUSD: totalSinPuestoUSD,
         yaPagadoUsd: 0,
         yaPagadoBs: 0,
+        tardanzasUsd: 0,
+        tardanzasBs: 0,
         pendienteUsd: 0,
       });
     }
@@ -602,6 +716,7 @@ export const BalanceView: React.FC<Props> = ({
     const totalComision = items.reduce((acc, i) => acc + i.comisionUSD, 0);
     const totalNeto = items.reduce((acc, i) => acc + i.netoUSD, 0);
     const totalYaPagado = items.reduce((acc, i) => acc + i.yaPagadoUsd, 0);
+    const totalTardanzas = items.reduce((acc, i) => acc + i.tardanzasUsd, 0);
     const totalPendiente = items.reduce((acc, i) => acc + i.pendienteUsd, 0);
 
     return {
@@ -610,6 +725,7 @@ export const BalanceView: React.FC<Props> = ({
       totalComision,
       totalNeto,
       totalYaPagado,
+      totalTardanzas,
       totalPendiente,
     };
   }, [puestos, movimientosSemana, movimientosComisionSemana]);
@@ -647,6 +763,7 @@ export const BalanceView: React.FC<Props> = ({
       let gasUSD = 0;
 
       for (const m of movsDia) {
+        if (m.categoria === 'Descuento Tardanza') continue;
         const { monto_usd, monto_bs } = calcularMontos(m);
         if (m.tipo === 'venta' || m.tipo === 'ingreso') {
           ingBs += monto_bs;
@@ -700,7 +817,7 @@ export const BalanceView: React.FC<Props> = ({
     }
 
     for (const m of movimientosSemanaFiltrados) {
-      if (m.tipo === 'gasto' || m.tipo === 'egreso') {
+      if ((m.tipo === 'gasto' || m.tipo === 'egreso') && m.categoria !== 'Descuento Tardanza') {
         const { monto_usd, monto_bs } = calcularMontos(m);
         const catNombre = normalizarCategoriaGasto(m.categoria, 'Hielo');
 
@@ -882,7 +999,9 @@ export const BalanceView: React.FC<Props> = ({
         const comisionesMes = movsFiltrados.filter(
           (m) =>
             m.tipo === 'gasto' &&
-            (m.categoria === 'Sueldos / Comisiones' || m.categoria === 'Nómina / Sueldos')
+            (m.categoria === 'Sueldos / Comisiones' ||
+              m.categoria === 'Nómina / Sueldos' ||
+              m.categoria === 'Descuento Tardanza')
         );
 
         await generarYDescargarExcel({
@@ -1191,7 +1310,7 @@ export const BalanceView: React.FC<Props> = ({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
                     {p.pendienteUsd === 0 && p.comisionUSD > 0 ? (
                       <>
                         <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#ECFDF5] text-[#166534] border border-emerald-200/70">
@@ -1206,6 +1325,15 @@ export const BalanceView: React.FC<Props> = ({
                           title="Registrar pago anticipado / adelanto"
                         >
                           + Adelanto
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAbrirModalTardanza(p)}
+                          disabled={guardandoTardanza}
+                          className="px-2 py-1 rounded-lg text-[11px] font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200/80 transition-colors cursor-pointer"
+                          title="Registrar descuento por tardanza"
+                        >
+                          - Tardanza
                         </button>
                       </>
                     ) : p.pendienteUsd > 0 && p.id !== 'sin-puesto' ? (
@@ -1239,17 +1367,37 @@ export const BalanceView: React.FC<Props> = ({
                         >
                           + Adelanto
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAbrirModalTardanza(p)}
+                          disabled={guardandoTardanza}
+                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200/80 transition-colors cursor-pointer whitespace-nowrap"
+                          title="Registrar descuento por tardanza"
+                        >
+                          - Tardanza
+                        </button>
                       </>
                     ) : p.id !== 'sin-puesto' ? (
-                      <button
-                        type="button"
-                        onClick={() => handleAbrirModalPago(p, true)}
-                        disabled={liquidandoPuestoId === p.id}
-                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-[#1E3A3A] bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
-                        title="Registrar adelanto de comisión"
-                      >
-                        + Adelanto
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleAbrirModalPago(p, true)}
+                          disabled={liquidandoPuestoId === p.id}
+                          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-[#1E3A3A] bg-zinc-100 hover:bg-zinc-200 transition-colors cursor-pointer"
+                          title="Registrar adelanto de comisión"
+                        >
+                          + Adelanto
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAbrirModalTardanza(p)}
+                          disabled={guardandoTardanza}
+                          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200/80 transition-colors cursor-pointer"
+                          title="Registrar descuento por tardanza"
+                        >
+                          - Tardanza
+                        </button>
+                      </>
                     ) : null}
                   </div>
                 </div>
@@ -1269,7 +1417,12 @@ export const BalanceView: React.FC<Props> = ({
                     </span>
                     {p.yaPagadoUsd > 0 && (
                       <span className="block text-[9px] text-[#166534] font-semibold tabular-nums leading-tight mt-0.5">
-                        Pagado: {formatUSD(p.yaPagadoUsd)}
+                        Adelantos: -{formatUSD(p.yaPagadoUsd)}
+                      </span>
+                    )}
+                    {p.tardanzasUsd > 0 && (
+                      <span className="block text-[9px] text-amber-700 font-semibold tabular-nums leading-tight mt-0.5">
+                        Tardanzas: -{formatUSD(p.tardanzasUsd)}
                       </span>
                     )}
                   </div>
@@ -1308,7 +1461,12 @@ export const BalanceView: React.FC<Props> = ({
                     </span>
                     {resumenPorPuesto.totalYaPagado > 0 && (
                       <span className="block text-[9px] text-[#166534] font-semibold tabular-nums leading-tight mt-0.5">
-                        Pagado: {formatUSD(resumenPorPuesto.totalYaPagado)}
+                        Adelantos: -{formatUSD(resumenPorPuesto.totalYaPagado)}
+                      </span>
+                    )}
+                    {resumenPorPuesto.totalTardanzas > 0 && (
+                      <span className="block text-[9px] text-amber-700 font-semibold tabular-nums leading-tight mt-0.5">
+                        Tardanzas: -{formatUSD(resumenPorPuesto.totalTardanzas)}
                       </span>
                     )}
                   </div>
@@ -1945,6 +2103,155 @@ export const BalanceView: React.FC<Props> = ({
                   <>
                     <CheckCircle2 size={14} className="text-[#86EFAC]" />
                     <span>Confirmar y Guardar Pago</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* MODAL RÁPIDO: DESCUENTO POR TARDANZA (sin afectar dinero en caja) */}
+      {tardanzaModalData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-zinc-200 w-full max-w-md overflow-hidden">
+            {/* Cabecera */}
+            <div className="bg-amber-600 text-white p-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-white/20 rounded-lg text-white">
+                  <Clock size={18} />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold leading-tight">
+                    Descuento por Tardanza
+                  </h2>
+                  <p className="text-[11px] text-amber-100 font-medium">
+                    Puesto: {tardanzaModalData.puestoNombre} (no afecta caja)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !guardandoTardanza && setTardanzaModalData(null)}
+                className="p-1 rounded-lg text-amber-100 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Contenido */}
+            <div className="p-4 sm:p-5 space-y-4">
+              {/* Fecha + Tasa BCV */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-[#18181B] mb-1">
+                    Fecha de tardanza:
+                  </label>
+                  <input
+                    type="date"
+                    value={tardanzaFecha}
+                    onChange={(e) => setTardanzaFecha(e.target.value)}
+                    className="w-full p-2 text-xs font-semibold border border-zinc-300 rounded-lg bg-white text-[#18181B] focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-[#18181B]">
+                      Tasa BCV (Bs/$):
+                    </label>
+                    {buscandoTasaTardanza && (
+                      <Loader2 size={11} className="animate-spin text-amber-600" />
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={tardanzaTasa}
+                    onChange={(e) => setTardanzaTasa(limpiarInputDecimal(e.target.value))}
+                    className="w-full p-2 text-xs font-mono font-bold border border-zinc-300 rounded-lg bg-white text-[#18181B] focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Botones rápidos en USD */}
+              <div>
+                <label className="block text-xs font-bold text-[#18181B] mb-1.5">
+                  Monto a descontar ($ USD):
+                </label>
+                <div className="grid grid-cols-4 gap-2 mb-2">
+                  {['1.00', '1.50', '2.00', '3.00'].map((val) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => setTardanzaMontoUSD(val)}
+                      className={`py-1.5 text-xs font-bold rounded-lg border transition-colors cursor-pointer ${
+                        tardanzaMontoUSD === val
+                          ? 'bg-amber-600 text-white border-amber-600'
+                          : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                      }`}
+                    >
+                      ${val}
+                    </button>
+                  ))}
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-xs text-zinc-400 font-bold pointer-events-none">
+                    $
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    value={tardanzaMontoUSD}
+                    onChange={(e) => setTardanzaMontoUSD(limpiarInputDecimal(e.target.value))}
+                    placeholder="0.00"
+                    className="w-full pl-7 pr-24 py-2 text-sm font-mono font-bold border border-zinc-300 rounded-lg bg-white text-[#18181B] focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                  />
+                  <span className="absolute right-3 top-2.5 text-[11px] font-mono font-semibold text-zinc-500 pointer-events-none">
+                    ≈ {formatVES((parseFloat(tardanzaMontoUSD.replace(',', '.')) || 0) * (parseFloat(tardanzaTasa.replace(',', '.')) || tasaActual || 100))}
+                  </span>
+                </div>
+              </div>
+
+              {/* Motivo / Minutos */}
+              <div>
+                <label className="block text-xs font-bold text-[#18181B] mb-1">
+                  Motivo / Minutos de retraso:
+                </label>
+                <input
+                  type="text"
+                  value={tardanzaMotivo}
+                  onChange={(e) => setTardanzaMotivo(e.target.value)}
+                  placeholder="Ej: Llegó 25 min tarde"
+                  className="w-full p-2.5 text-xs border border-zinc-300 rounded-lg bg-white text-[#18181B] focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-zinc-50 border-t border-zinc-200 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setTardanzaModalData(null)}
+                disabled={guardandoTardanza}
+                className="px-4 py-2 text-xs font-bold text-zinc-600 hover:bg-zinc-200 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmarTardanza}
+                disabled={guardandoTardanza}
+                className="px-4 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-lg flex items-center gap-1.5 transition-colors disabled:opacity-50 shadow-xs cursor-pointer"
+              >
+                {guardandoTardanza ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin text-white" />
+                    <span>Guardando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Clock size={14} />
+                    <span>Aplicar Descuento</span>
                   </>
                 )}
               </button>

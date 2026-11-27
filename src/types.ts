@@ -19,7 +19,8 @@ export type CategoriaMovimiento =
   | 'Cuota Negocio'
   | 'Gastos de Emergencia'
   | 'Equipamiento / Maquinaria'
-  | 'Sueldos / Comisiones';
+  | 'Sueldos / Comisiones'
+  | 'Descuento Tardanza';
 
 export type MetodoPago = 'pago_movil' | 'punto_venta' | 'efectivo_bs' | 'divisa';
 
